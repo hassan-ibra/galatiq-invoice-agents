@@ -10,11 +10,11 @@
 
 ## Global constraints
 
-These come from [TASK.md](TASK.md), [DECISION.MD](DECISION.MD), and [.cursor/rules/project.mdc](.cursor/rules/project.mdc). Every step follows them.
+These come from [TASK.md](TASK.md), [DECISIONS.md](DECISIONS.md), and [.cursor/rules/project.mdc](.cursor/rules/project.mdc). Every step follows them.
 
 - Python 3.11 or newer. Entry point: `python main.py --invoice_path=<file>`.
 - Pipeline order: Ingestion, then Validation, then Approval, then Payment.
-- Follow the 12 rows in DECISION.MD. Do not add business rules, a UI, a real bank call, or a live exchange rate.
+- Follow the 12 rows in DECISIONS.md. Do not add business rules, a UI, a real bank call, or a live exchange rate.
 - Use `Decimal` for every money amount. Store catalog prices as text and convert them with `Decimal`. Never use `float` for money.
 - Pass invoice data between agents as Pydantic models.
 - Grok is called only through `xai-sdk`, model `grok-4.7`. Read the key from `XAI_API_KEY`. Never put the key in a file.
@@ -23,7 +23,7 @@ These come from [TASK.md](TASK.md), [DECISION.MD](DECISION.MD), and [.cursor/rul
 - Payment is a mock function. It never calls a network.
 - Every outcome is logged with a reason a person can read.
 - Each agent has pytest tests, and each test asserts a real result so it can fail.
-- One agent per file. No features beyond TASK.md and DECISION.MD.
+- One agent per file. No features beyond TASK.md and DECISIONS.md.
 
 ## How two rules on one invoice are resolved
 
@@ -361,4 +361,4 @@ Each step ends when its own pytest command passes. Commit that step before start
 12. **All sample invoices.** Extend `tests/test_graph.py` with the expected status of every file listed above. Run `python -m pytest -v`. Fix only the agent that disagrees with a listed status. Do not change a decision row to make a test pass.
 13. **Run instructions.** Update [README.md](README.md) with the setup command, the 1001 command, and the three flags. Keep it to how to run the project.
 
-After step 12, `python -m pytest -v` is the check that the whole plan matches DECISION.MD.
+After step 12, `python -m pytest -v` is the check that the whole plan matches DECISIONS.md.
