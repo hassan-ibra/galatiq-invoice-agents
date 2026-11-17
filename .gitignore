@@ -1,0 +1,5 @@
+data/inventory.db
+logs/
+.venv/
+__pycache__/
+.DS_Store
