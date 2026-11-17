@@ -1,0 +1,21 @@
+---
+description: Galatiq invoice processing take-home rules
+alwaysApply: true
+---
+
+# Project rules
+
+- Python 3.11+. Run with: python main.py --invoice_path=<file>
+- Multi-agent pipeline using LangGraph: Ingestion -> Validation -> Approval -> Payment.
+- Follow DECISIONS.md exactly for every edge case. Do not invent new business rules.
+- Deterministic code makes every money, stock and date decision. The LLM only extracts, normalizes, summarizes and flags. It never moves money.
+- Use Decimal for all money. Never use float for money.
+- Use Pydantic models for invoice data passed between agents.
+- The LLM is Grok via the xai-sdk package, model pinned to grok-4.7. The API key comes from the XAI_API_KEY environment variable and is never written in code.
+- By default, mock the LLM so everything runs offline with no API key. Use --use-llm to call the real Grok.
+- Inventory lives in a local SQLite database, created by a setup script.
+- Payment is a mock function. It never calls a real service.
+- Every decision is logged with a clear reason, so results are audit-ready.
+- Write pytest tests for each agent. Tests must be able to fail.
+- Keep each agent small and in its own file. Keep the code simple and readable.
+- Do not add features that are not in TASK.md or DECISIONS.md.
