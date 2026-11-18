@@ -61,7 +61,7 @@ class GrokLlm:
             raise SystemExit("XAI_API_KEY is not set. Refusing to call Grok.")
         from xai_sdk import Client
 
-        self._client = Client(api_key=api_key)
+        self._client = Client(api_key=api_key, timeout=30)
 
     def extract(self, text: str) -> dict:
         raw = self._ask(
@@ -111,12 +111,16 @@ class GrokLlm:
     def _ask(self, prompt: str, *, json_mode: bool = False) -> str:
         from xai_sdk.chat import user
 
-        kwargs: dict[str, Any] = {"model": MODEL}
-        if json_mode:
-            kwargs["response_format"] = "json_object"
-        chat = self._client.chat.create(**kwargs)
-        chat.append(user(prompt))
-        return chat.sample().content
+        try:
+            kwargs: dict[str, Any] = {"model": MODEL}
+            if json_mode:
+                kwargs["response_format"] = "json_object"
+            chat = self._client.chat.create(**kwargs)
+            chat.append(user(prompt))
+            return chat.sample().content
+        except Exception as exc:
+            reason = str(exc).strip() or exc.__class__.__name__
+            raise SystemExit(f"Grok call failed: {reason}. Check XAI_API_KEY.") from exc
 
 
 def _status(findings: list[Finding]) -> str:
@@ -175,6 +179,13 @@ def _normalize_draft(draft: dict) -> dict:
                 amount, found = normalize_amount(price)
                 item["unit_price"] = f"{amount:.2f}"
                 corrections.extend(found)
+    for key in ("subtotal", "tax_amount", "total"):
+        value = draft.get(key)
+        if not isinstance(value, str):
+            continue
+        amount, found = normalize_amount(value)
+        draft[key] = amount
+        corrections.extend(found)
     existing = draft.get("corrections")
     if not isinstance(existing, list):
         existing = []

@@ -1,6 +1,8 @@
 from decimal import Decimal
 
-from invoice_agents.llm import MockLlm
+import pytest
+
+from invoice_agents.llm import GrokLlm, MockLlm, _normalize_draft
 from invoice_agents.models import Finding, Invoice, LineItem
 
 
@@ -57,3 +59,44 @@ def test_summarize_and_critique_pair():
     )
     assert "INV-1001" in rejected
     assert "rejected" in rejected
+
+
+def test_normalize_draft_money_strings_become_decimals():
+    draft = _normalize_draft(
+        {
+            "subtotal": "$5,000.00",
+            "tax_amount": "$5,000.00",
+            "total": "$5,000.00",
+        }
+    )
+
+    for key in ("subtotal", "tax_amount", "total"):
+        assert draft[key] == Decimal("5000.00")
+        assert type(draft[key]) is Decimal
+    assert draft["corrections"] == [
+        "$5,000.00 -> 5000.00",
+        "$5,000.00 -> 5000.00",
+        "$5,000.00 -> 5000.00",
+    ]
+
+
+def test_grok_call_failure_exits_with_a_clear_message(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+
+    class FakeChat:
+        def create(self, **kwargs):
+            raise TimeoutError("timed out")
+
+    class FakeClient:
+        def __init__(self, api_key, timeout):
+            assert api_key == "test-key"
+            assert timeout == 30
+            self.chat = FakeChat()
+
+    monkeypatch.setattr("xai_sdk.Client", FakeClient)
+    llm = GrokLlm()
+
+    with pytest.raises(SystemExit) as caught:
+        llm._ask("hello")
+
+    assert caught.value.code == "Grok call failed: timed out. Check XAI_API_KEY."
