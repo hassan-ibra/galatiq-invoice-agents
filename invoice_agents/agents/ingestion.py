@@ -27,9 +27,11 @@ def ingest(state: PipelineState) -> PipelineState:
     for path in sorted(requested.parent.iterdir()):
         if path.resolve() == requested.resolve() or path.suffix.lower() not in READABLE:
             continue
+        if not _filename_has_invoice_number(path, invoice.invoice_number):
+            continue
         try:
             other = _load_draft(path, llm)
-        except (ValidationError, ValueError, OSError):
+        except (ValidationError, ValueError, OSError, SystemExit):
             continue
         if other.get("invoice_number") == invoice.invoice_number:
             copies.append((path, other))
@@ -66,6 +68,17 @@ def ingest(state: PipelineState) -> PipelineState:
         state.apply_findings()
     _log(state)
     return state
+
+
+def _filename_has_invoice_number(path: Path, invoice_number: str) -> bool:
+    if not invoice_number:
+        return False
+    name = path.name.casefold()
+    number = invoice_number.casefold()
+    if number in name:
+        return True
+    digits = "".join(char for char in invoice_number if char.isdigit())
+    return bool(digits) and digits in name
 
 
 def _load_draft(path: Path, llm) -> dict:

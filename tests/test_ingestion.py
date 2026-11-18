@@ -77,9 +77,66 @@ def test_row8_matching_copies_process_once(tmp_path):
         assert state.status == "pending"
 
 
+def test_sibling_scan_only_reads_same_number_files(tmp_path, monkeypatch):
+    seen: list[str] = []
+    real = MockLlm.extract
+
+    def extract(self, text):
+        seen.append(text)
+        return real(self, text)
+
+    monkeypatch.setattr(MockLlm, "extract", extract)
+    primary = tmp_path / "invoice_INV-1001.txt"
+    same = tmp_path / "INV-1001-copy.txt"
+    other = tmp_path / "INV-9999.txt"
+    _write_copy(primary, "10.00")
+    primary.write_text(primary.read_text(encoding="utf-8").replace("INV-1099", "INV-1001"), encoding="utf-8")
+    _write_copy(same, "10.00")
+    same.write_text(same.read_text(encoding="utf-8").replace("INV-1099", "INV-1001"), encoding="utf-8")
+    _write_copy(other, "10.00")
+
+    state = _ingest(primary, tmp_path)
+
+    assert len(seen) == 2
+    assert all("INV-1001" in text for text in seen)
+    assert all("INV-1099" not in text for text in seen)
+    assert state.invoice is not None
+    assert {Path(path).name for path in state.invoice.source_files} == {
+        "invoice_INV-1001.txt",
+        "INV-1001-copy.txt",
+    }
+
+
+def test_llm_error_during_sibling_scan_does_not_crash(tmp_path, monkeypatch):
+    real = MockLlm.extract
+
+    def extract(self, text):
+        if "sibling-copy" in text:
+            raise SystemExit("Grok call failed: boom")
+        return real(self, text)
+
+    monkeypatch.setattr(MockLlm, "extract", extract)
+    primary = tmp_path / "INV-1001.txt"
+    sibling = tmp_path / "INV-1001-copy.txt"
+    _write_copy(primary, "10.00")
+    primary.write_text(primary.read_text(encoding="utf-8").replace("INV-1099", "INV-1001"), encoding="utf-8")
+    _write_copy(sibling, "12.00")
+    sibling.write_text(
+        sibling.read_text(encoding="utf-8").replace("INV-1099", "INV-1001") + "\nNotes: sibling-copy\n",
+        encoding="utf-8",
+    )
+
+    state = _ingest(primary, tmp_path)
+
+    assert state.invoice is not None
+    assert state.invoice.invoice_number == "INV-1001"
+    assert state.invoice.total == Decimal("10.00")
+    assert [Path(path).name for path in state.invoice.source_files] == ["INV-1001.txt"]
+
+
 def test_row8_disagreement_holds(tmp_path):
-    first = tmp_path / "invoice_a.txt"
-    second = tmp_path / "invoice_b.txt"
+    first = tmp_path / "INV-1099-a.txt"
+    second = tmp_path / "INV-1099-b.txt"
     _write_copy(first, "10.00")
     _write_copy(second, "12.00")
 

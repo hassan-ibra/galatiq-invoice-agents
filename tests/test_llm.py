@@ -80,6 +80,37 @@ def test_normalize_draft_money_strings_become_decimals():
     ]
 
 
+def test_normalize_draft_int_and_float_amounts():
+    draft = _normalize_draft(
+        {
+            "subtotal": 5000,
+            "tax_amount": 0.0,
+            "total": 250.5,
+            "line_items": [{"item": "WidgetA", "quantity": 1, "unit_price": 250}],
+        }
+    )
+
+    assert draft["subtotal"] == Decimal("5000.00")
+    assert type(draft["subtotal"]) is Decimal
+    assert draft["tax_amount"] == Decimal("0.00")
+    assert draft["total"] == Decimal("250.50")
+    assert draft["line_items"][0]["unit_price"] == "250.00"
+
+
+def test_normalize_draft_nan_amount_is_unreadable():
+    draft = _normalize_draft(
+        {
+            "tax_amount": float("nan"),
+            "total": float("inf"),
+        }
+    )
+
+    assert draft["tax_amount"] is None
+    assert draft["total"] is None
+    assert "tax_amount unreadable: nan" in draft["corrections"]
+    assert "total unreadable: inf" in draft["corrections"]
+
+
 def test_normalize_draft_null_tax_amount_is_left_empty():
     draft = _normalize_draft(
         {

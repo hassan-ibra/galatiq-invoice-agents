@@ -1,5 +1,7 @@
 import json
+import math
 import os
+from decimal import Decimal
 from typing import Any, Protocol
 
 from invoice_agents.models import Finding, Invoice
@@ -69,7 +71,8 @@ class GrokLlm:
             "vendor_name, vendor_address, invoice_date, due_date, currency, "
             "line_items, subtotal, tax_amount, and total. line_items is a list of "
             "objects with item, quantity, and unit_price. Write money and dates "
-            "as strings.\n\n" + text,
+            "as strings. If there is no tax line, return tax_amount \"0.00\". "
+            "Return null only if a tax line exists but cannot be read.\n\n" + text,
             json_mode=True,
         )
         draft = _load_json(raw)
@@ -142,6 +145,17 @@ def _grok_failure(exc: Exception) -> str:
     return f"Grok call failed: {reason}"
 
 
+def _read_grok_amount(value: Any) -> tuple[Decimal | None, list[str], bool]:
+    if isinstance(value, str) or value is None:
+        amount, found = normalize_amount(value)
+        return amount, found, True
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None, [], False
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None, [], True
+    return Decimal(str(value)).quantize(Decimal("0.01")), [], True
+
+
 def _unreadable(field: str, value: Any) -> str:
     shown = "null" if value is None else repr(value)
     return f"{field} unreadable: {shown}"
@@ -198,22 +212,25 @@ def _normalize_draft(draft: dict) -> dict:
                 canonical, found = normalize_item_name(name)
                 item["item"] = canonical
                 corrections.extend(found)
+            if "unit_price" not in item:
+                continue
             price = item.get("unit_price")
-            if isinstance(price, str) or price is None and "unit_price" in item:
-                amount, found = normalize_amount(price)
-                if amount is None:
-                    item["unit_price"] = None
-                    corrections.append(_unreadable("unit_price", price))
-                else:
-                    item["unit_price"] = f"{amount:.2f}"
-                    corrections.extend(found)
+            amount, found, handled = _read_grok_amount(price)
+            if not handled:
+                continue
+            if amount is None:
+                item["unit_price"] = None
+                corrections.append(_unreadable("unit_price", price))
+            else:
+                item["unit_price"] = f"{amount:.2f}"
+                corrections.extend(found)
     for key in ("subtotal", "tax_amount", "total"):
         if key not in draft:
             continue
         value = draft[key]
-        if not isinstance(value, str) and value is not None:
+        amount, found, handled = _read_grok_amount(value)
+        if not handled:
             continue
-        amount, found = normalize_amount(value)
         if amount is None:
             draft[key] = None
             corrections.append(_unreadable(key, value))
