@@ -32,7 +32,9 @@ class MockLlm:
         self.critique_calls = 0
 
     def extract(self, text: str) -> dict:
-        raise NotImplementedError("offline text extraction is added with the parser")
+        from invoice_agents.parsers import parse_text
+
+        return parse_text(text)
 
     def flag_address(self, address: str | None) -> list[str]:
         if not address:
