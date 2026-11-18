@@ -67,7 +67,7 @@ def test_approved_invoice_is_paid(tmp_path, monkeypatch, capsys):
         "vendor": "Widgets Inc.",
         "amount": "5000.00",
     }
-    assert capsys.readouterr().out == "Paid 5000.00 to Widgets Inc.\n"
+    assert capsys.readouterr().err == "Paid 5000.00 to Widgets Inc.\n"
 
 
 def test_rejected_invoice_is_not_paid(tmp_path, monkeypatch):
@@ -168,4 +168,4 @@ def test_row2_void_original_and_pay_revised_once(tmp_path, monkeypatch, capsys):
     assert calls == [("Precision Parts Ltd.", Decimal("5940.00"))]
     assert again.payment_result is None
     assert "already paid" in _reasons(again.audit_path).lower()
-    assert capsys.readouterr().out == "Paid 5940.00 to Precision Parts Ltd.\n"
+    assert capsys.readouterr().err == "Paid 5940.00 to Precision Parts Ltd.\n"

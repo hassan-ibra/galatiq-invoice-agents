@@ -113,7 +113,7 @@ def _invoice_from_draft(draft: dict) -> Invoice:
         "vendor_name": draft.get("vendor_name") or "",
         "line_items": lines,
         "total": draft["total"],
-        "corrections": list(draft.get("corrections") or []),
+        "corrections": _unique(list(draft.get("corrections") or [])),
     }
     for key in (
         "revision",
@@ -190,6 +190,14 @@ def _merge(copies: list[tuple[Path, dict]]) -> tuple[dict, list[Finding]]:
             if correction not in base["corrections"]:
                 base["corrections"].append(correction)
     return base, findings
+
+
+def _unique(corrections: list[str]) -> list[str]:
+    unique: list[str] = []
+    for correction in corrections:
+        if correction not in unique:
+            unique.append(correction)
+    return unique
 
 
 def _signature(lines: list[dict]) -> list[tuple]:

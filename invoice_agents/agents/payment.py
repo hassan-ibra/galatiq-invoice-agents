@@ -1,3 +1,4 @@
+import sys
 from decimal import Decimal
 from pathlib import Path
 
@@ -9,7 +10,7 @@ CENT = Decimal("0.01")
 
 def mock_payment(vendor: str, amount: Decimal) -> dict[str, str]:
     rendered = f"{amount.quantize(CENT):.2f}"
-    print(f"Paid {rendered} to {vendor}")
+    print(f"Paid {rendered} to {vendor}", file=sys.stderr)
     return {"status": "success", "vendor": vendor, "amount": rendered}
 
 

@@ -34,6 +34,15 @@ def test_parse_failure_is_rejected_and_logged(tmp_path):
     assert decisions[0]["reasons"] == ["invoice total is missing"]
 
 
+def test_inv_1001_corrections_are_recorded_once(tmp_path):
+    state = _ingest(INVOICES / "invoice_1001.txt", tmp_path)
+    invoice = state.invoice
+
+    assert invoice is not None
+    assert invoice.corrections.count("5,000.00 -> 5000.00") == 1
+    assert len(invoice.corrections) == len(set(invoice.corrections))
+
+
 def test_row7_ocr_invoice_is_normalized(tmp_path):
     state = _ingest(INVOICES / "invoice_1012.txt", tmp_path)
     invoice = state.invoice
