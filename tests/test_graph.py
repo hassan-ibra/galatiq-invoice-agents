@@ -269,6 +269,18 @@ def test_clean_invoice_has_one_attempt_and_empty_critique(tmp_path):
     assert payload["critique"] == []
 
 
+def test_each_pipeline_run_shares_one_run_id(tmp_path):
+    _first, first = _run_sample(tmp_path, "invoice_1001.txt")
+    _second, both = _run_sample(tmp_path, "invoice_1002.txt")
+    first_ids = {decision["run_id"] for decision in first}
+    second_ids = {decision["run_id"] for decision in both} - first_ids
+
+    assert len(first_ids) == 1
+    assert len(second_ids) == 1
+    assert first_ids.isdisjoint(second_ids)
+    assert len(first_ids.pop()) == 6
+
+
 def test_every_audit_line_has_ts_and_agent(tmp_path):
     _state, decisions = _run_sample(tmp_path, "invoice_1001.txt")
 

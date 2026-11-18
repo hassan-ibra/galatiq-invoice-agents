@@ -97,6 +97,7 @@ def _log(
                 "reason": f"human gate skipped for total {_money(invoice.total)}",
             },
             agent="approval",
+            run_id=state.run_id,
         )
     if not new_findings and not skipped_gate:
         append_decision(
@@ -107,6 +108,7 @@ def _log(
                 "reason": state.summary,
             },
             agent="approval",
+            run_id=state.run_id,
         )
         return
     for finding in new_findings:
@@ -120,6 +122,7 @@ def _log(
                 "reason": finding.reason,
             },
             agent="approval",
+            run_id=state.run_id,
         )
 
 

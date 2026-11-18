@@ -1,8 +1,13 @@
+import uuid
 from datetime import date
 from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def _new_run_id() -> str:
+    return uuid.uuid4().hex[:6]
 
 
 def _reject_float_money(value: Any) -> Any:
@@ -70,6 +75,7 @@ class PipelineState(BaseModel):
     source_path: str
     db_path: str
     audit_path: str
+    run_id: str = Field(default_factory=_new_run_id)
     invoice: Invoice | None = None
     findings: list[Finding] = Field(default_factory=list)
     status: Literal["pending", "rejected", "hold", "approved", "voided"] = "pending"

@@ -19,7 +19,9 @@ def ingest(state: PipelineState) -> PipelineState:
         llm.source_name = requested.name
     cache: dict[Path, tuple[dict, Invoice | None, list[str], int]] = {}
     try:
-        draft, invoice, problems, attempts = _settle(requested, llm, cache, state.audit_path)
+        draft, invoice, problems, attempts = _settle(
+            requested, llm, cache, state.audit_path, state.run_id
+        )
     except (ValidationError, ValueError, OSError) as exc:
         state.status = "rejected"
         state.summary = str(exc)
@@ -41,7 +43,7 @@ def ingest(state: PipelineState) -> PipelineState:
             continue
         try:
             other, _other_invoice, _other_problems, _other_attempts = _settle(
-                path, llm, cache, state.audit_path
+                path, llm, cache, state.audit_path, state.run_id
             )
         except (ValidationError, ValueError, OSError, SystemExit):
             continue
@@ -127,13 +129,14 @@ def _settle(
     llm,
     cache: dict[Path, tuple[dict, Invoice | None, list[str], int]],
     audit_path: str,
+    run_id: str,
 ) -> tuple[dict, Invoice | None, list[str], int]:
     key = path.resolve()
     if key in cache:
         return cache[key]
     draft = _load_draft(path, llm)
     invoice, problems = _assess(draft)
-    _log_attempt(audit_path, path, 1, draft, problems)
+    _log_attempt(audit_path, path, 1, draft, problems, run_id)
     attempts = 1
     if problems and path.suffix.lower() in {".txt", ".pdf"}:
         if isinstance(llm, GrokLlm):
@@ -149,10 +152,10 @@ def _settle(
             failure = ""
         attempts = 2
         if retried is None:
-            _log_attempt(audit_path, path, 2, {}, [failure])
+            _log_attempt(audit_path, path, 2, {}, [failure], run_id)
         else:
             invoice2, problems2 = _assess(retried)
-            _log_attempt(audit_path, path, 2, retried, problems2)
+            _log_attempt(audit_path, path, 2, retried, problems2, run_id)
             if _prefer_second(invoice, problems, invoice2, problems2):
                 draft, invoice, problems = retried, invoice2, problems2
     cache[key] = (draft, invoice, problems, attempts)
@@ -160,7 +163,12 @@ def _settle(
 
 
 def _log_attempt(
-    audit_path: str, path: Path, attempt: int, draft: dict, problems: list[str]
+    audit_path: str,
+    path: Path,
+    attempt: int,
+    draft: dict,
+    problems: list[str],
+    run_id: str,
 ) -> None:
     append_decision(
         audit_path,
@@ -171,6 +179,7 @@ def _log_attempt(
             "problems": problems,
         },
         agent="ingestion",
+        run_id=run_id,
     )
 
 
@@ -464,4 +473,5 @@ def _log(state: PipelineState) -> None:
             "corrections": [] if invoice is None else invoice.corrections,
         },
         agent="ingestion",
+        run_id=state.run_id,
     )

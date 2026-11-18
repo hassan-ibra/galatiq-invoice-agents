@@ -212,6 +212,7 @@ def _log(state: PipelineState, invoice: Invoice) -> None:
                 "reason": "no findings",
             },
             agent="validation",
+            run_id=state.run_id,
         )
         return
     for finding in state.findings:
@@ -225,6 +226,7 @@ def _log(state: PipelineState, invoice: Invoice) -> None:
                 "reason": finding.reason,
             },
             agent="validation",
+            run_id=state.run_id,
         )
 
 

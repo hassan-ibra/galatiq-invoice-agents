@@ -3,6 +3,7 @@ import json
 from datetime import date
 from pathlib import Path
 
+from invoice_agents.audit import format_audit_log
 from invoice_agents.graph import build_graph
 from invoice_agents.models import PipelineState
 
@@ -16,13 +17,21 @@ def _as_of_date(value: str) -> date:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--invoice_path", required=True)
+    parser.add_argument("--invoice_path")
+    parser.add_argument("--show-log", metavar="PATH")
     parser.add_argument("--use-llm", action="store_true")
     parser.add_argument("--auto-approve", action="store_true")
     parser.add_argument("--as-of", type=_as_of_date)
     parser.add_argument("--db", default="data/inventory.db")
     parser.add_argument("--audit", default="logs/audit.jsonl")
     args = parser.parse_args()
+    if args.show_log:
+        if not Path(args.show_log).is_file():
+            parser.error(f"audit log does not exist: {args.show_log}")
+        print(format_audit_log(args.show_log))
+        return
+    if not args.invoice_path:
+        parser.error("the following arguments are required: --invoice_path")
     if not Path(args.db).is_file():
         parser.error(f"inventory database does not exist: {args.db}")
 

@@ -22,37 +22,19 @@ def pay(state: PipelineState) -> PipelineState:
     if state.void_original:
         _log_original_void(state, invoice)
 
-    if state.status == "rejected" or state.status == "hold":
-        _log_reasons(state, invoice)
+    if state.status == "rejected":
+        _log_not_paid(state, invoice, "not paid: invoice was rejected")
+        return state
+    if state.status == "hold":
+        _log_not_paid(state, invoice, "not paid: invoice is on hold")
         return state
     if state.status == "voided":
-        append_decision(
-            state.audit_path,
-            {
-                "invoice_number": invoice.invoice_number,
-                "revision": invoice.revision or "",
-                "status": "voided",
-                "reason": f"{invoice.invoice_number} is voided and was not paid",
-            },
-            agent="payment",
-        )
+        _log_not_paid(state, invoice, "not paid: original voided by revision")
         return state
     if state.status != "approved":
         return state
     if _already_paid(state, invoice):
-        append_decision(
-            state.audit_path,
-            {
-                "invoice_number": invoice.invoice_number,
-                "revision": invoice.revision or "",
-                "status": state.status,
-                "reason": (
-                    f"invoice {invoice.invoice_number} "
-                    f"revision {invoice.revision or 'none'} was already paid"
-                ),
-            },
-            agent="payment",
-        )
+        _log_not_paid(state, invoice, "not paid: already paid")
         return state
 
     result = mock_payment(invoice.vendor_name, invoice.total)
@@ -69,6 +51,7 @@ def pay(state: PipelineState) -> PipelineState:
             "reason": f"Paid {result['amount']} to {result['vendor']}",
         },
         agent="payment",
+        run_id=state.run_id,
     )
     return state
 
@@ -87,21 +70,22 @@ def _log_original_void(state: PipelineState, invoice: Invoice) -> None:
             ),
         },
         agent="payment",
+        run_id=state.run_id,
     )
 
 
-def _log_reasons(state: PipelineState, invoice: Invoice) -> None:
-    if state.findings:
-        return
+def _log_not_paid(state: PipelineState, invoice: Invoice | None, reason: str) -> None:
+    number = None if invoice is None or not invoice.invoice_number else invoice.invoice_number
     append_decision(
         state.audit_path,
         {
-            "invoice_number": invoice.invoice_number,
-            "revision": invoice.revision or "",
+            "invoice_number": number,
             "status": state.status,
-            "reason": f"{state.status} with no findings",
+            "paid": False,
+            "reason": reason,
         },
         agent="payment",
+        run_id=state.run_id,
     )
 
 

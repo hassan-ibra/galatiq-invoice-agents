@@ -177,3 +177,101 @@ def test_row2_void_original_and_pay_revised_once(tmp_path, monkeypatch, capsys):
     assert again.payment_result is None
     assert "already paid" in _reasons(again.audit_path).lower()
     assert capsys.readouterr().err == "Paid 5940.00 to Precision Parts Ltd.\n"
+
+
+def test_hold_logs_one_not_paid_line(tmp_path, monkeypatch):
+    calls = _spy(monkeypatch)
+    finding = "WidgetA unit price 300.00 is above catalog 250.00"
+
+    state = _run(
+        tmp_path,
+        _invoice("INV-1010", "7185.00"),
+        "hold-line",
+        status="hold",
+        findings=[Finding(rule=9, outcome="hold", reason=finding)],
+    )
+
+    assert calls == []
+    assert state.payment_result is None
+    _assert_not_paid(state, "INV-1010", "hold", "not paid: invoice is on hold", finding)
+
+
+def test_rejected_logs_one_not_paid_line(tmp_path, monkeypatch):
+    calls = _spy(monkeypatch)
+    finding = "FakeItem has zero stock"
+
+    state = _run(
+        tmp_path,
+        _invoice("INV-1003", "100000.00"),
+        "rejected-line",
+        status="rejected",
+        findings=[Finding(rule=5, outcome="reject", reason=finding)],
+    )
+
+    assert calls == []
+    assert state.payment_result is None
+    _assert_not_paid(state, "INV-1003", "rejected", "not paid: invoice was rejected", finding)
+
+
+def test_voided_logs_one_not_paid_line(tmp_path, monkeypatch):
+    calls = _spy(monkeypatch)
+
+    state = _run(
+        tmp_path,
+        _invoice("INV-1004", "5940.00", revision="R1"),
+        "voided-line",
+        status="voided",
+    )
+
+    assert calls == []
+    assert state.payment_result is None
+    _assert_not_paid(state, "INV-1004", "voided", "not paid: original voided by revision", "")
+
+
+def test_already_paid_logs_one_not_paid_line(tmp_path, monkeypatch):
+    calls = _spy(monkeypatch)
+    invoice = _invoice("INV-1001", "5000.00")
+
+    first = _run(tmp_path, invoice, "duplicate-line", status="approved")
+    again = pay(
+        PipelineState(
+            source_path=first.source_path,
+            db_path=first.db_path,
+            audit_path=first.audit_path,
+            invoice=invoice,
+            status="approved",
+        )
+    )
+
+    assert calls == [("Widgets Inc.", Decimal("5000.00"))]
+    assert again.payment_result is None
+    logged = [
+        decision
+        for decision in read_decisions(again.audit_path)
+        if decision.get("paid") is False
+    ]
+    assert logged == [
+        {
+            "ts": logged[0]["ts"],
+            "agent": "payment",
+            "run_id": logged[0]["run_id"],
+            "invoice_number": "INV-1001",
+            "status": "approved",
+            "paid": False,
+            "reason": "not paid: already paid",
+        }
+    ]
+
+
+def _assert_not_paid(state: PipelineState, number: str, status: str, reason: str, finding: str) -> None:
+    logged = read_decisions(state.audit_path)
+    assert len(logged) == 1
+    line = logged[0]
+    assert line["agent"] == "payment"
+    assert line["invoice_number"] == number
+    assert line["status"] == status
+    assert line["paid"] is False
+    assert line["reason"] == reason
+    if finding:
+        assert finding not in line["reason"]
+    assert "rule" not in line
