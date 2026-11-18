@@ -76,6 +76,8 @@ class PipelineState(BaseModel):
     late: bool = False
     summary: str = ""
     critique: str = ""
+    attempts: int = 0
+    extraction_critique: list[str] = Field(default_factory=list)
     as_of: date | None = None
     auto_approve: bool = False
     use_llm: bool = False

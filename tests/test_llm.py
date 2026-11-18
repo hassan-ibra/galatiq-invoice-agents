@@ -181,6 +181,63 @@ def test_rejected_api_key_exits_immediately(monkeypatch, status):
     assert caught.value.code == "Grok rejected the API key. Check XAI_API_KEY."
 
 
+def test_grok_progress_goes_to_stderr_and_mock_is_silent(monkeypatch, capsys):
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+
+    class Sample:
+        content = "ok"
+
+    class FakeChat:
+        def create(self, **kwargs):
+            return self
+
+        def append(self, message):
+            return None
+
+        def sample(self):
+            return Sample()
+
+    class FakeClient:
+        def __init__(self, api_key, timeout):
+            self.chat = FakeChat()
+
+    monkeypatch.setattr("xai_sdk.Client", FakeClient)
+    llm = GrokLlm()
+    llm.source_name = "invoice_1001.txt"
+
+    assert llm._ask("hello") == "ok"
+    err = capsys.readouterr().err.splitlines()
+    assert err[0] == "[grok] extract invoice_1001.txt"
+    seconds = err[1].removeprefix("[grok] done in ").removesuffix("s")
+    whole, fraction = seconds.split(".")
+    assert whole.isdigit() and fraction.isdigit() and len(fraction) == 1
+
+    MockLlm().flag_address("100 Main St")
+    MockLlm().summarize(_invoice(), [])
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+class _InvalidArgument(Exception):
+    def code(self):
+        return "StatusCode.INVALID_ARGUMENT"
+
+    def details(self):
+        return "Incorrect API key provided"
+
+
+def test_invalid_argument_api_key_is_rejected(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+    _install_failing_client(monkeypatch, _InvalidArgument())
+    llm = GrokLlm()
+
+    with pytest.raises(SystemExit) as caught:
+        llm._ask("hello")
+
+    assert caught.value.code == "Grok rejected the API key. Check XAI_API_KEY."
+
+
 def test_other_grok_error_names_the_reason(monkeypatch):
     monkeypatch.setenv("XAI_API_KEY", "test-key")
     _install_failing_client(monkeypatch, RuntimeError("connection reset"))

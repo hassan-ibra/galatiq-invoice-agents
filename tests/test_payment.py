@@ -1,4 +1,5 @@
 from decimal import Decimal
+from pathlib import Path
 
 from invoice_agents.agents.payment import mock_payment, pay
 from invoice_agents.audit import read_decisions
@@ -51,6 +52,13 @@ def _reasons(audit_path: str) -> str:
     return " ".join(decision.get("reason", "") for decision in read_decisions(audit_path))
 
 
+def _finding_was_not_logged(audit_path: str, reason: str) -> bool:
+    path = Path(audit_path)
+    if not path.exists():
+        return True
+    return reason not in path.read_text(encoding="utf-8")
+
+
 def test_approved_invoice_is_paid(tmp_path, monkeypatch, capsys):
     calls = _spy(monkeypatch)
 
@@ -84,7 +92,7 @@ def test_rejected_invoice_is_not_paid(tmp_path, monkeypatch):
 
     assert calls == []
     assert state.payment_result is None
-    assert reason in _reasons(state.audit_path)
+    assert _finding_was_not_logged(state.audit_path, reason)
 
 
 def test_held_invoice_is_not_paid(tmp_path, monkeypatch):
@@ -101,7 +109,7 @@ def test_held_invoice_is_not_paid(tmp_path, monkeypatch):
 
     assert calls == []
     assert state.payment_result is None
-    assert reason in _reasons(state.audit_path)
+    assert _finding_was_not_logged(state.audit_path, reason)
 
 
 def test_row2_void_original_and_pay_revised_once(tmp_path, monkeypatch, capsys):
@@ -151,7 +159,7 @@ def test_row2_void_original_and_pay_revised_once(tmp_path, monkeypatch, capsys):
     assert calls == [("Precision Parts Ltd.", Decimal("5940.00"))]
     assert held.payment_result is None
     assert held_log[0]["reason"] == VOID_REASON
-    assert "742 Evergreen Terrace" in _reasons(held.audit_path)
+    assert _finding_was_not_logged(held.audit_path, "742 Evergreen Terrace")
     assert "Paid" not in _reasons(held.audit_path)
 
     again = pay(

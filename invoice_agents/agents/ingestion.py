@@ -1,4 +1,5 @@
 import copy
+from decimal import Decimal
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -14,12 +15,21 @@ READABLE = {".json", ".csv", ".xml", ".txt", ".pdf"}
 def ingest(state: PipelineState) -> PipelineState:
     llm = GrokLlm() if state.use_llm else MockLlm()
     requested = Path(state.source_path)
+    if isinstance(llm, GrokLlm):
+        llm.source_name = requested.name
+    cache: dict[Path, tuple[dict, Invoice | None, list[str], int]] = {}
     try:
-        draft = _load_draft(requested, llm)
-        invoice = _build_invoice(draft, requested, llm)
+        draft, invoice, problems, attempts = _settle(requested, llm, cache, state.audit_path)
     except (ValidationError, ValueError, OSError) as exc:
         state.status = "rejected"
         state.summary = str(exc)
+        _log(state)
+        return state
+    if invoice is None:
+        state.attempts = attempts
+        state.extraction_critique = list(problems)
+        state.status = "rejected"
+        state.summary = "; ".join(problems) or "invoice could not be read"
         _log(state)
         return state
 
@@ -30,36 +40,49 @@ def ingest(state: PipelineState) -> PipelineState:
         if not _filename_has_invoice_number(path, invoice.invoice_number):
             continue
         try:
-            other = _load_draft(path, llm)
+            other, _other_invoice, _other_problems, _other_attempts = _settle(
+                path, llm, cache, state.audit_path
+            )
         except (ValidationError, ValueError, OSError, SystemExit):
             continue
         if other.get("invoice_number") == invoice.invoice_number:
             copies.append((path, other))
 
-    if _has_revision(copies) and _has_original(copies):
-        chosen_path, chosen = _pick_revised(copies)
-        try:
-            chosen_invoice = _build_invoice(chosen, chosen_path, llm)
-        except (ValidationError, ValueError, OSError) as exc:
+    if len(copies) == 1:
+        merged_invoice = invoice
+        findings = _problem_findings(problems)
+        state.attempts = attempts
+        state.extraction_critique = list(problems)
+    elif _has_revision(copies) and _has_original(copies):
+        chosen_path, _chosen = _pick_revised(copies)
+        _chosen_draft, chosen_invoice, chosen_problems, chosen_attempts = cache[chosen_path.resolve()]
+        state.attempts = chosen_attempts
+        state.extraction_critique = list(chosen_problems)
+        if chosen_invoice is None:
             state.status = "rejected"
-            state.summary = str(exc)
+            state.summary = "; ".join(chosen_problems) or "invoice could not be read"
             _log(state)
             return state
         chosen_invoice.source_files = [str(chosen_path)]
         chosen_invoice.address_warnings = llm.flag_address(chosen_invoice.vendor_address)
         state.invoice = chosen_invoice
         state.void_original = True
+        state.findings.extend(_problem_findings(chosen_problems))
+        if state.findings:
+            state.apply_findings()
         _log(state)
         return state
-
-    merged, findings = _merge(copies)
-    try:
-        merged_invoice = _build_invoice(merged, requested, llm)
-    except (ValidationError, ValueError, OSError) as exc:
-        state.status = "rejected"
-        state.summary = str(exc)
-        _log(state)
-        return state
+    else:
+        merged, findings = _merge(copies)
+        merged_invoice, merged_problems = _assess(merged)
+        state.attempts = attempts
+        state.extraction_critique = list(merged_problems)
+        if merged_invoice is None:
+            state.status = "rejected"
+            state.summary = "; ".join(merged_problems) or "invoice could not be read"
+            _log(state)
+            return state
+        findings.extend(_problem_findings(merged_problems))
     merged_invoice.source_files = [str(path) for path, _draft in copies]
     merged_invoice.address_warnings = llm.flag_address(merged_invoice.vendor_address)
     state.invoice = merged_invoice
@@ -82,6 +105,8 @@ def _filename_has_invoice_number(path: Path, invoice_number: str) -> bool:
 
 
 def _load_draft(path: Path, llm) -> dict:
+    if isinstance(llm, GrokLlm):
+        llm.source_name = path.name
     suffix = path.suffix.lower()
     if suffix == ".pdf":
         return llm.extract(pdf_text(path))
@@ -97,15 +122,161 @@ def _load_draft(path: Path, llm) -> dict:
     raise ValueError(f"unsupported invoice file: {path.name}")
 
 
-def _build_invoice(draft: dict, path: Path, llm) -> Invoice:
-    try:
-        return _invoice_from_draft(draft)
-    except ValidationError as exc:
-        if path.suffix.lower() not in {".txt", ".pdf"}:
-            raise
+def _settle(
+    path: Path,
+    llm,
+    cache: dict[Path, tuple[dict, Invoice | None, list[str], int]],
+    audit_path: str,
+) -> tuple[dict, Invoice | None, list[str], int]:
+    key = path.resolve()
+    if key in cache:
+        return cache[key]
+    draft = _load_draft(path, llm)
+    invoice, problems = _assess(draft)
+    _log_attempt(audit_path, path, 1, draft, problems)
+    attempts = 1
+    if problems and path.suffix.lower() in {".txt", ".pdf"}:
+        if isinstance(llm, GrokLlm):
+            llm.source_name = path.name
         raw = pdf_text(path) if path.suffix.lower() == ".pdf" else path.read_text(encoding="utf-8")
-        retried = llm.extract(f"{raw}\n\nThe draft failed validation:\n{exc}")
-        return _invoice_from_draft(retried)
+        prompt = raw + "\n\nProblems to fix:\n" + "\n".join(problems)
+        try:
+            retried = llm.extract(prompt, retry=True)
+        except (ValidationError, ValueError, OSError, SystemExit) as exc:
+            retried = None
+            failure = str(exc) or "extraction failed"
+        else:
+            failure = ""
+        attempts = 2
+        if retried is None:
+            _log_attempt(audit_path, path, 2, {}, [failure])
+        else:
+            invoice2, problems2 = _assess(retried)
+            _log_attempt(audit_path, path, 2, retried, problems2)
+            if _prefer_second(invoice, problems, invoice2, problems2):
+                draft, invoice, problems = retried, invoice2, problems2
+    cache[key] = (draft, invoice, problems, attempts)
+    return cache[key]
+
+
+def _log_attempt(
+    audit_path: str, path: Path, attempt: int, draft: dict, problems: list[str]
+) -> None:
+    append_decision(
+        audit_path,
+        {
+            "attempt": attempt,
+            "source": path.name,
+            "invoice_number": draft.get("invoice_number"),
+            "problems": problems,
+        },
+        agent="ingestion",
+    )
+
+
+def _prefer_second(
+    first_invoice: Invoice | None,
+    first_problems: list[str],
+    second_invoice: Invoice | None,
+    second_problems: list[str],
+) -> bool:
+    if second_invoice is None:
+        return False
+    if len(second_problems) < len(first_problems):
+        return True
+    return first_invoice is None and len(second_problems) == len(first_problems)
+
+
+def _assess(draft: dict) -> tuple[Invoice | None, list[str]]:
+    try:
+        invoice = _invoice_from_draft(draft)
+    except ValidationError as exc:
+        return None, _schema_problems(exc)
+    return invoice, _invoice_problems(invoice)
+
+
+def _schema_problems(exc: ValidationError) -> list[str]:
+    problems = []
+    for err in exc.errors():
+        loc = ".".join(str(part) for part in err["loc"])
+        problems.append(f"{loc}: {err['msg']}" if loc else str(err["msg"]))
+    return problems or [str(exc)]
+
+
+def _problem_findings(problems: list[str]) -> list[Finding]:
+    return [Finding(rule=6, outcome="hold", reason=problem) for problem in problems]
+
+
+def _invoice_problems(invoice: Invoice) -> list[str]:
+    problems: list[str] = []
+    if not invoice.invoice_number.strip():
+        problems.append("invoice number is missing")
+    if not invoice.vendor_name.strip():
+        problems.append("vendor name is empty")
+    if not invoice.line_items:
+        problems.append("invoice has no line items")
+    if invoice.total is None:
+        problems.append("invoice total is missing")
+    subtotal = _subtotal_problem(invoice)
+    if subtotal:
+        problems.append(subtotal)
+    total = _total_problem(invoice)
+    if total:
+        problems.append(total)
+    return problems
+
+
+def _subtotal_problem(invoice: Invoice) -> str | None:
+    if invoice.subtotal is None:
+        return None
+    amounts = [
+        _line_amount(line) for line in invoice.line_items if line.item.casefold() != "shipping"
+    ]
+    if any(amount is None for amount in amounts):
+        return None
+    computed = _cents(sum(amounts, Decimal("0")))
+    stated = _cents(invoice.subtotal)
+    if stated == computed:
+        return None
+    return f"stated subtotal {stated:.2f} does not equal line sum {computed:.2f}"
+
+
+def _total_problem(invoice: Invoice) -> str | None:
+    if invoice.total is None or invoice.tax_amount is None:
+        return None
+    amounts = [_line_amount(line) for line in invoice.line_items]
+    if any(amount is None for amount in amounts):
+        return None
+    shipping = _cents(
+        sum(
+            (
+                amount
+                for line, amount in zip(invoice.line_items, amounts)
+                if line.item.casefold() == "shipping" and amount is not None
+            ),
+            Decimal("0"),
+        )
+    )
+    if invoice.subtotal is None:
+        expected = _cents(sum(amounts, Decimal("0")) + invoice.tax_amount)
+    else:
+        expected = _cents(invoice.subtotal + invoice.tax_amount + shipping)
+    stated = _cents(invoice.total)
+    if stated == expected:
+        return None
+    return f"subtotal + tax {expected:.2f} does not equal total {stated:.2f}"
+
+
+def _line_amount(line: LineItem) -> Decimal | None:
+    if line.amount is not None:
+        return _cents(line.amount)
+    if line.unit_price is None:
+        return None
+    return _cents(line.unit_price * line.quantity)
+
+
+def _cents(value: Decimal) -> Decimal:
+    return value.quantize(Decimal("0.01"))
 
 
 def _invoice_from_draft(draft: dict) -> Invoice:
@@ -286,11 +457,11 @@ def _log(state: PipelineState) -> None:
     append_decision(
         state.audit_path,
         {
-            "agent": "ingestion",
             "invoice_number": None if invoice is None else invoice.invoice_number,
             "status": state.status,
             "void_original": state.void_original,
             "reasons": reasons,
             "corrections": [] if invoice is None else invoice.corrections,
         },
+        agent="ingestion",
     )

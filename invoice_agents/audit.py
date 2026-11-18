@@ -1,12 +1,18 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 
-def append_decision(audit_path: str | Path, decision: dict) -> None:
+def append_decision(audit_path: str | Path, decision: dict, *, agent: str) -> None:
     path = Path(audit_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "agent": agent,
+        **decision,
+    }
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(decision) + "\n")
+        handle.write(json.dumps(record) + "\n")
 
 
 def read_decisions(audit_path: str | Path) -> list[dict]:

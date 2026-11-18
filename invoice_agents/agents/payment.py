@@ -34,6 +34,7 @@ def pay(state: PipelineState) -> PipelineState:
                 "status": "voided",
                 "reason": f"{invoice.invoice_number} is voided and was not paid",
             },
+            agent="payment",
         )
         return state
     if state.status != "approved":
@@ -50,6 +51,7 @@ def pay(state: PipelineState) -> PipelineState:
                     f"revision {invoice.revision or 'none'} was already paid"
                 ),
             },
+            agent="payment",
         )
         return state
 
@@ -66,6 +68,7 @@ def pay(state: PipelineState) -> PipelineState:
             "amount": result["amount"],
             "reason": f"Paid {result['amount']} to {result['vendor']}",
         },
+        agent="payment",
     )
     return state
 
@@ -83,33 +86,23 @@ def _log_original_void(state: PipelineState, invoice: Invoice) -> None:
                 "and Acme never pays twice"
             ),
         },
+        agent="payment",
     )
 
 
 def _log_reasons(state: PipelineState, invoice: Invoice) -> None:
-    if not state.findings:
-        append_decision(
-            state.audit_path,
-            {
-                "invoice_number": invoice.invoice_number,
-                "revision": invoice.revision or "",
-                "status": state.status,
-                "reason": f"{state.status} with no findings",
-            },
-        )
+    if state.findings:
         return
-    for finding in state.findings:
-        append_decision(
-            state.audit_path,
-            {
-                "invoice_number": invoice.invoice_number,
-                "revision": invoice.revision or "",
-                "status": state.status,
-                "rule": finding.rule,
-                "outcome": finding.outcome,
-                "reason": finding.reason,
-            },
-        )
+    append_decision(
+        state.audit_path,
+        {
+            "invoice_number": invoice.invoice_number,
+            "revision": invoice.revision or "",
+            "status": state.status,
+            "reason": f"{state.status} with no findings",
+        },
+        agent="payment",
+    )
 
 
 def _already_paid(state: PipelineState, invoice: Invoice) -> bool:

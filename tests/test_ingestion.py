@@ -2,6 +2,8 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+from main import _payload
+
 from invoice_agents.agents.ingestion import ingest
 from invoice_agents.audit import read_decisions
 from invoice_agents.llm import MockLlm
@@ -132,6 +134,107 @@ def test_llm_error_during_sibling_scan_does_not_crash(tmp_path, monkeypatch):
     assert state.invoice.invoice_number == "INV-1001"
     assert state.invoice.total == Decimal("10.00")
     assert [Path(path).name for path in state.invoice.source_files] == ["INV-1001.txt"]
+
+
+def test_validation_failure_retries_extract_once(tmp_path, monkeypatch):
+    calls: list[bool] = []
+
+    def extract(self, text, *, retry=False):
+        calls.append(retry)
+        if retry:
+            return {
+                "invoice_number": "INV-1001",
+                "vendor_name": "Widgets Inc.",
+                "line_items": [{"item": "WidgetA", "quantity": 1, "unit_price": "10.00"}],
+                "total": Decimal("10.00"),
+            }
+        return {
+            "invoice_number": "INV-1001",
+            "vendor_name": "Widgets Inc.",
+            "line_items": [{"item": "WidgetA", "quantity": 1, "unit_price": "10.00"}],
+            "total": "not-a-number",
+        }
+
+    monkeypatch.setattr(MockLlm, "extract", extract)
+    path = tmp_path / "invoice_1002.txt"
+    path.write_text("placeholder\n", encoding="utf-8")
+
+    state = _ingest(path, tmp_path)
+
+    assert calls == [False, True]
+    assert state.invoice is not None
+    assert state.invoice.total == Decimal("10.00")
+
+
+def test_bad_math_draft_retries_with_two_attempts(tmp_path, monkeypatch):
+    def extract(self, text, *, retry=False):
+        if not retry:
+            return {
+                "invoice_number": "INV-1001",
+                "vendor_name": "Widgets Inc.",
+                "line_items": [{"item": "WidgetA", "quantity": 1, "unit_price": "10.00"}],
+                "subtotal": "10.00",
+                "tax_amount": "0.00",
+                "total": "12.00",
+            }
+        return {
+            "invoice_number": "INV-1001",
+            "vendor_name": "Widgets Inc.",
+            "line_items": [{"item": "WidgetA", "quantity": 1, "unit_price": "10.00"}],
+            "subtotal": "10.00",
+            "tax_amount": "0.00",
+            "total": "10.00",
+        }
+
+    monkeypatch.setattr(MockLlm, "extract", extract)
+    path = tmp_path / "invoice_1002.txt"
+    path.write_text("placeholder\n", encoding="utf-8")
+
+    state = _ingest(path, tmp_path)
+    payload = _payload(state)
+    attempt_lines = [line for line in read_decisions(state.audit_path) if "attempt" in line]
+
+    assert payload["attempts"] == 2
+    assert [line["attempt"] for line in attempt_lines] == [1, 2]
+    assert state.invoice is not None
+    assert state.invoice.total == Decimal("10.00")
+
+
+def test_keeps_the_attempt_with_fewer_problems(tmp_path, monkeypatch):
+    calls: list[bool] = []
+
+    def extract(self, text, *, retry=False):
+        calls.append(retry)
+        if not retry:
+            return {
+                "invoice_number": "INV-1001",
+                "vendor_name": "",
+                "line_items": [{"item": "WidgetA", "quantity": 1, "unit_price": "10.00"}],
+                "subtotal": "99.00",
+                "tax_amount": "0.00",
+                "total": "50.00",
+            }
+        return {
+            "invoice_number": "INV-1001",
+            "vendor_name": "Widgets Inc.",
+            "line_items": [{"item": "WidgetA", "quantity": 1, "unit_price": "10.00"}],
+            "subtotal": "10.00",
+            "tax_amount": "0.00",
+            "total": "12.00",
+        }
+
+    monkeypatch.setattr(MockLlm, "extract", extract)
+    path = tmp_path / "invoice_1002.txt"
+    path.write_text("placeholder\n", encoding="utf-8")
+
+    state = _ingest(path, tmp_path)
+
+    assert calls == [False, True]
+    assert state.invoice is not None
+    assert state.invoice.vendor_name == "Widgets Inc."
+    assert state.invoice.total == Decimal("12.00")
+    assert state.status == "hold"
+    assert any("subtotal + tax" in finding.reason for finding in state.findings)
 
 
 def test_row8_disagreement_holds(tmp_path):

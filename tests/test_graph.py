@@ -3,6 +3,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -256,6 +257,40 @@ def test_sample_file(tmp_path, filename, expected):
         assert invoice.corrections
     if "currency" in expected:
         assert invoice.currency == expected["currency"]
+
+
+def test_clean_invoice_has_one_attempt_and_empty_critique(tmp_path):
+    completed = _run_cli(tmp_path, str(INVOICE))
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+    assert payload["status"] == "approved"
+    assert payload["attempts"] == 1
+    assert payload["critique"] == []
+
+
+def test_every_audit_line_has_ts_and_agent(tmp_path):
+    _state, decisions = _run_sample(tmp_path, "invoice_1001.txt")
+
+    assert decisions
+    for decision in decisions:
+        stamp = datetime.fromisoformat(decision["ts"])
+        assert stamp.utcoffset() is not None
+        assert stamp.utcoffset().total_seconds() == 0
+        assert decision["agent"] in {"ingestion", "validation", "approval", "payment"}
+
+
+def test_findings_are_logged_once(tmp_path):
+    _state, decisions = _run_sample(tmp_path, "invoice_1002.txt")
+    logged = [
+        (decision["rule"], decision["reason"])
+        for decision in decisions
+        if "rule" in decision and "reason" in decision
+    ]
+
+    assert logged
+    assert len(logged) == len(set(logged))
+    assert all(decision.get("agent") != "payment" for decision in decisions if "rule" in decision)
 
 
 def _run_cli(tmp_path: Path, invoice_path: str, *extra: str) -> subprocess.CompletedProcess[str]:

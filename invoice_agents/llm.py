@@ -1,6 +1,8 @@
 import json
 import math
 import os
+import sys
+import time
 from decimal import Decimal
 from typing import Any, Protocol
 
@@ -17,7 +19,7 @@ MODEL = "grok-4.7"
 
 
 class Llm(Protocol):
-    def extract(self, text: str) -> dict: ...
+    def extract(self, text: str, *, retry: bool = False) -> dict: ...
 
     def flag_address(self, address: str | None) -> list[str]: ...
 
@@ -33,9 +35,10 @@ class MockLlm:
         self.summarize_calls = 0
         self.critique_calls = 0
 
-    def extract(self, text: str) -> dict:
+    def extract(self, text: str, *, retry: bool = False) -> dict:
         from invoice_agents.parsers import parse_text
 
+        text = text.split("\n\nProblems to fix:\n", 1)[0]
         return parse_text(text)
 
     def flag_address(self, address: str | None) -> list[str]:
@@ -64,8 +67,12 @@ class GrokLlm:
         from xai_sdk import Client
 
         self._client = Client(api_key=api_key, timeout=120)
+        self.source_name = "invoice"
+        self._step = ""
 
-    def extract(self, text: str) -> dict:
+    def extract(self, text: str, *, retry: bool = False) -> dict:
+        verb = "retry extract" if retry else "extract"
+        self._step = f"{verb} {self.source_name}"
         raw = self._ask(
             "Extract this invoice as a JSON object with keys invoice_number, "
             "vendor_name, vendor_address, invoice_date, due_date, currency, "
@@ -83,6 +90,7 @@ class GrokLlm:
     def flag_address(self, address: str | None) -> list[str]:
         if not address:
             return []
+        self._step = "flag_address"
         raw = self._ask(
             "Flag this vendor address if it is a famous fictional or government "
             "address that looks fraudulent. Return JSON "
@@ -98,6 +106,7 @@ class GrokLlm:
 
     def summarize(self, invoice: Invoice, findings: list[Finding]) -> str:
         reasons = "; ".join(finding.reason for finding in findings) or "no findings"
+        self._step = "summarize"
         return self._ask(
             "Write one short sentence naming the invoice number and the status "
             f"{_status(findings)}. Do not change the status.\n\n"
@@ -105,6 +114,7 @@ class GrokLlm:
         )
 
     def critique(self, summary: str) -> str:
+        self._step = "critique"
         return self._ask(
             "Critique this invoice summary in one short sentence. "
             "Repeat the invoice number and status. Do not change the decision.\n\n"
@@ -117,15 +127,21 @@ class GrokLlm:
             raise SystemExit("XAI_API_KEY is not set.")
         from xai_sdk.chat import user
 
+        step = self._step or f"extract {self.source_name}"
+        print(f"[grok] {step}", file=sys.stderr)
+        started = time.perf_counter()
         try:
             kwargs: dict[str, Any] = {"model": MODEL}
             if json_mode:
                 kwargs["response_format"] = "json_object"
             chat = self._client.chat.create(**kwargs)
             chat.append(user(prompt))
-            return chat.sample().content
+            content = chat.sample().content
         except Exception as exc:
             raise SystemExit(_grok_failure(exc)) from exc
+        elapsed = time.perf_counter() - started
+        print(f"[grok] done in {elapsed:.1f}s", file=sys.stderr)
+        return content
 
 
 def _grok_failure(exc: Exception) -> str:
@@ -136,10 +152,18 @@ def _grok_failure(exc: Exception) -> str:
             labels.append(str(code()))
         except Exception:
             pass
+    details = getattr(exc, "details", None)
+    if callable(details):
+        try:
+            labels.append(str(details()))
+        except Exception:
+            pass
     blob = " ".join(labels)
     if "DEADLINE_EXCEEDED" in blob:
         return "Grok call timed out after 120s."
     if "UNAUTHENTICATED" in blob or "PERMISSION_DENIED" in blob:
+        return "Grok rejected the API key. Check XAI_API_KEY."
+    if "INVALID_ARGUMENT" in blob and "api key" in blob.casefold():
         return "Grok rejected the API key. Check XAI_API_KEY."
     reason = str(exc).strip() or exc.__class__.__name__
     return f"Grok call failed: {reason}"

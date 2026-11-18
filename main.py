@@ -51,6 +51,8 @@ def _payload(state: PipelineState) -> dict:
         "corrections": [] if invoice is None else invoice.corrections,
         "address_warnings": [] if invoice is None else invoice.address_warnings,
         "summary": state.summary,
+        "attempts": state.attempts,
+        "critique": state.extraction_critique,
         "payment_result": state.payment_result,
     }
 
