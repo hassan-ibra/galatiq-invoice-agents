@@ -7,6 +7,12 @@ from invoice_agents.agents.validation import validate
 from invoice_agents.models import PipelineState
 
 
+def _after_ingestion(state: PipelineState) -> str:
+    if state.invoice is None:
+        return END
+    return "validation"
+
+
 def build_graph():
     graph = StateGraph(PipelineState)
     graph.add_node("ingestion", ingest)
@@ -14,7 +20,7 @@ def build_graph():
     graph.add_node("approval", approve)
     graph.add_node("payment", pay)
     graph.add_edge(START, "ingestion")
-    graph.add_edge("ingestion", "validation")
+    graph.add_conditional_edges("ingestion", _after_ingestion)
     graph.add_edge("validation", "approval")
     graph.add_edge("approval", "payment")
     graph.add_edge("payment", END)

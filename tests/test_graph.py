@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ from invoice_agents.agents.payment import pay
 from invoice_agents.agents.validation import validate
 from invoice_agents.audit import read_decisions
 from invoice_agents.graph import build_graph
+from invoice_agents.inventory import get_item
 from invoice_agents.models import PipelineState
 from setup_inventory import create_inventory
 
@@ -254,3 +256,218 @@ def test_sample_file(tmp_path, filename, expected):
         assert invoice.corrections
     if "currency" in expected:
         assert invoice.currency == expected["currency"]
+
+
+def _run_cli(tmp_path: Path, invoice_path: str, *extra: str) -> subprocess.CompletedProcess[str]:
+    db_path = tmp_path / "inventory.db"
+    create_inventory(db_path)
+    env = os.environ.copy()
+    env.pop("XAI_API_KEY", None)
+    return subprocess.run(
+        [
+            sys.executable,
+            "main.py",
+            f"--invoice_path={invoice_path}",
+            f"--db={db_path}",
+            f"--audit={tmp_path / 'audit.jsonl'}",
+            *extra,
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _rejected_payload(completed: subprocess.CompletedProcess[str]) -> dict:
+    assert completed.returncode == 0, completed.stderr
+    assert "Traceback" not in completed.stderr
+    payload = json.loads(completed.stdout)
+    assert payload["status"] == "rejected"
+    assert payload["invoice_number"] is None
+    assert payload["payment_result"] is None
+    assert payload["summary"]
+    return payload
+
+
+def test_empty_file_prints_rejected_json(tmp_path):
+    path = tmp_path / "empty.txt"
+    path.write_text("", encoding="utf-8")
+
+    payload = _rejected_payload(_run_cli(tmp_path, str(path)))
+
+    assert "total" in payload["summary"]
+
+
+def test_docx_file_prints_rejected_json(tmp_path):
+    path = tmp_path / "invoice.docx"
+    path.write_bytes(b"not a document")
+
+    payload = _rejected_payload(_run_cli(tmp_path, str(path)))
+
+    assert "unsupported invoice file" in payload["summary"]
+
+
+def test_broken_json_prints_rejected_json(tmp_path):
+    path = tmp_path / "broken.json"
+    path.write_text("{", encoding="utf-8")
+
+    payload = _rejected_payload(_run_cli(tmp_path, str(path)))
+
+    assert payload["summary"]
+
+
+def test_missing_file_prints_rejected_json(tmp_path):
+    missing = tmp_path / "missing.txt"
+
+    payload = _rejected_payload(_run_cli(tmp_path, str(missing)))
+
+    assert "missing.txt" in payload["summary"]
+
+
+def test_bad_as_of_is_an_argparse_error(tmp_path):
+    completed = _run_cli(tmp_path, str(INVOICE), "--as-of", "yesterday")
+
+    assert completed.returncode != 0
+    assert "Traceback" not in completed.stderr
+    assert "as-of" in completed.stderr
+    assert completed.stdout == ""
+
+
+def test_missing_db_is_an_argparse_error(tmp_path):
+    missing = tmp_path / "missing.db"
+    env = os.environ.copy()
+    env.pop("XAI_API_KEY", None)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "main.py",
+            f"--invoice_path={INVOICE}",
+            f"--db={missing}",
+            f"--audit={tmp_path / 'audit.jsonl'}",
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "Traceback" not in completed.stderr
+    assert "inventory database does not exist" in completed.stderr
+    assert not missing.exists()
+    with pytest.raises(sqlite3.OperationalError):
+        get_item(missing, "WidgetA")
+    assert not missing.exists()
+
+
+def test_blank_vendor_line_is_rejected(tmp_path):
+    path = tmp_path / "blank_vendor.txt"
+    path.write_text(
+        "\n".join(
+            [
+                "Vendor:",
+                "Invoice Number: INV-2001",
+                "Date: 2026-01-15",
+                "Due Date: 2026-02-01",
+                "WidgetA    qty: 10    unit price: $250.00",
+                "Subtotal: $2,500.00",
+                "Tax (0%): $0.00",
+                "Total Amount: $2,500.00",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "inventory.db"
+    create_inventory(db_path)
+    result = build_graph().invoke(
+        PipelineState(
+            source_path=str(path),
+            db_path=str(db_path),
+            audit_path=str(tmp_path / "audit.jsonl"),
+        )
+    )
+    if isinstance(result, dict):
+        result = PipelineState.model_validate(result)
+
+    assert result.invoice is not None
+    assert result.invoice.vendor_name == ""
+    assert result.invoice.invoice_number == "INV-2001"
+    assert result.status == "rejected"
+    assert result.payment_result is None
+    assert any(
+        finding.rule == 6 and "vendor name is empty" in finding.reason
+        for finding in result.findings
+    )
+
+
+def test_invoice_with_no_line_items_is_rejected(tmp_path):
+    path = tmp_path / "no_lines.json"
+    path.write_text(
+        json.dumps(
+            {
+                "invoice_number": "INV-2002",
+                "vendor": {"name": "Widgets Inc."},
+                "line_items": [],
+                "total": "0.00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "inventory.db"
+    create_inventory(db_path)
+    result = build_graph().invoke(
+        PipelineState(
+            source_path=str(path),
+            db_path=str(db_path),
+            audit_path=str(tmp_path / "audit.jsonl"),
+        )
+    )
+    if isinstance(result, dict):
+        result = PipelineState.model_validate(result)
+
+    assert result.status == "rejected"
+    assert result.payment_result is None
+    assert any(
+        finding.rule == 6 and finding.reason == "invoice has no line items"
+        for finding in result.findings
+    )
+
+
+def test_fractional_quantity_is_rejected(tmp_path):
+    path = tmp_path / "fraction.json"
+    path.write_text(
+        json.dumps(
+            {
+                "invoice_number": "INV-2003",
+                "vendor": {"name": "Widgets Inc."},
+                "line_items": [{"item": "WidgetA", "quantity": 2.7, "unit_price": "250.00"}],
+                "subtotal": "675.00",
+                "tax_amount": "0.00",
+                "total": "675.00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "inventory.db"
+    create_inventory(db_path)
+    result = build_graph().invoke(
+        PipelineState(
+            source_path=str(path),
+            db_path=str(db_path),
+            audit_path=str(tmp_path / "audit.jsonl"),
+        )
+    )
+    if isinstance(result, dict):
+        result = PipelineState.model_validate(result)
+
+    assert result.invoice is not None
+    assert result.invoice.line_items[0].quantity != 2
+    assert result.status == "rejected"
+    assert result.payment_result is None
+    assert any(
+        finding.rule == 6 and "2.7" in finding.reason and "whole number" in finding.reason
+        for finding in result.findings
+    )

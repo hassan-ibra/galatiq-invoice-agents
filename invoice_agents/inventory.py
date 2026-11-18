@@ -10,7 +10,8 @@ class InventoryItem(NamedTuple):
 
 
 def get_item(db_path: str | Path, item_name: str) -> InventoryItem | None:
-    connection = sqlite3.connect(db_path)
+    uri = f"{Path(db_path).resolve().as_uri()}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True)
     try:
         row = connection.execute(
             "SELECT stock, unit_price FROM inventory WHERE item = ?",

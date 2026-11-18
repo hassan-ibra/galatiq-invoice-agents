@@ -17,7 +17,7 @@ def ingest(state: PipelineState) -> PipelineState:
     try:
         draft = _load_draft(requested, llm)
         invoice = _build_invoice(draft, requested, llm)
-    except (ValidationError, ValueError) as exc:
+    except (ValidationError, ValueError, OSError) as exc:
         state.status = "rejected"
         state.summary = str(exc)
         _log(state)
@@ -38,7 +38,7 @@ def ingest(state: PipelineState) -> PipelineState:
         chosen_path, chosen = _pick_revised(copies)
         try:
             chosen_invoice = _build_invoice(chosen, chosen_path, llm)
-        except (ValidationError, ValueError) as exc:
+        except (ValidationError, ValueError, OSError) as exc:
             state.status = "rejected"
             state.summary = str(exc)
             _log(state)
@@ -53,7 +53,7 @@ def ingest(state: PipelineState) -> PipelineState:
     merged, findings = _merge(copies)
     try:
         merged_invoice = _build_invoice(merged, requested, llm)
-    except (ValidationError, ValueError) as exc:
+    except (ValidationError, ValueError, OSError) as exc:
         state.status = "rejected"
         state.summary = str(exc)
         _log(state)
@@ -100,7 +100,7 @@ def _invoice_from_draft(draft: dict) -> Invoice:
     for raw in draft.get("line_items") or []:
         payload = {
             "item": raw["item"],
-            "quantity": int(raw["quantity"]),
+            "quantity": _quantity(raw["quantity"]),
             "unit_price": raw["unit_price"],
         }
         if raw.get("amount") is not None:
@@ -200,11 +200,36 @@ def _unique(corrections: list[str]) -> list[str]:
     return unique
 
 
+def _quantity(value):
+    from decimal import Decimal, InvalidOperation
+
+    if isinstance(value, bool):
+        raise ValueError(f"quantity {value} is not a whole number")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, Decimal):
+        number = value
+    elif isinstance(value, float):
+        number = Decimal(str(value))
+    else:
+        try:
+            number = Decimal(str(value).strip())
+        except InvalidOperation:
+            raise ValueError(f"quantity {value} is not a whole number") from None
+    if number != number.to_integral_value():
+        return number
+    return int(number)
+
+
 def _signature(lines: list[dict]) -> list[tuple]:
     from decimal import Decimal
 
     return [
-        (line["item"], int(line["quantity"]), Decimal(line["unit_price"]).quantize(Decimal("0.01")))
+        (
+            line["item"],
+            _quantity(line["quantity"]),
+            Decimal(line["unit_price"]).quantize(Decimal("0.01")),
+        )
         for line in lines
     ]
 

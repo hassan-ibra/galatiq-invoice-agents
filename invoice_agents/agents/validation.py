@@ -39,7 +39,24 @@ def validate(state: PipelineState) -> PipelineState:
 
 def _check_data_integrity(invoice: Invoice) -> list[Finding]:
     findings: list[Finding] = []
+    if invoice.vendor_name.strip() == "":
+        findings.append(
+            Finding(rule=6, outcome="reject", reason="vendor name is empty")
+        )
+    if not invoice.line_items:
+        findings.append(
+            Finding(rule=6, outcome="reject", reason="invoice has no line items")
+        )
     for line in invoice.line_items:
+        if not _is_whole_quantity(line.quantity):
+            findings.append(
+                Finding(
+                    rule=6,
+                    outcome="reject",
+                    reason=f"{line.item} quantity {line.quantity} is not a whole number",
+                )
+            )
+            continue
         if line.quantity < 1:
             findings.append(
                 Finding(
@@ -207,6 +224,15 @@ def _log(state: PipelineState, invoice: Invoice) -> None:
                 "reason": finding.reason,
             },
         )
+
+
+def _is_whole_quantity(quantity: int | Decimal) -> bool:
+    if isinstance(quantity, bool):
+        return False
+    if isinstance(quantity, int):
+        return True
+    number = Decimal(quantity)
+    return number == number.to_integral_value()
 
 
 def _is_shipping(line: LineItem) -> bool:

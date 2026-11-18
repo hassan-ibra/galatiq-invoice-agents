@@ -1,9 +1,17 @@
 import argparse
 import json
 from datetime import date
+from pathlib import Path
 
 from invoice_agents.graph import build_graph
 from invoice_agents.models import PipelineState
+
+
+def _as_of_date(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid --as-of date: {value}") from exc
 
 
 def main() -> None:
@@ -11,16 +19,18 @@ def main() -> None:
     parser.add_argument("--invoice_path", required=True)
     parser.add_argument("--use-llm", action="store_true")
     parser.add_argument("--auto-approve", action="store_true")
-    parser.add_argument("--as-of")
+    parser.add_argument("--as-of", type=_as_of_date)
     parser.add_argument("--db", default="data/inventory.db")
     parser.add_argument("--audit", default="logs/audit.jsonl")
     args = parser.parse_args()
+    if not Path(args.db).is_file():
+        parser.error(f"inventory database does not exist: {args.db}")
 
     state = PipelineState(
         source_path=args.invoice_path,
         db_path=args.db,
         audit_path=args.audit,
-        as_of=None if args.as_of is None else date.fromisoformat(args.as_of),
+        as_of=args.as_of,
         auto_approve=args.auto_approve,
         use_llm=args.use_llm,
     )

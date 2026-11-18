@@ -15,7 +15,7 @@ class LineItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     item: str
-    quantity: int
+    quantity: int | Decimal
     unit_price: Decimal | None
     amount: Decimal | None = None
     note: str | None = None

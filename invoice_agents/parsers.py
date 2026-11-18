@@ -99,21 +99,21 @@ def parse_xml(text: str) -> dict:
 def parse_text(text: str) -> dict:
     corrections: list[str] = []
     number_raw = _search(
-        r"(?:invoice(?:\s*number)?|inv(?:oice)?(?:\s*no\.?)?|inv\s*#)\s*[:#]?\s*(INV[\s\-]*\d+|\d+)",
+        r"(?:invoice(?:[ \t]*number)?|inv(?:oice)?(?:[ \t]*no\.?)?|inv\s*#)\s*[:#]?[ \t]*(INV[\s\-]*\d+|\d+)",
         text,
     )
     number, found = normalize_invoice_number(number_raw or "")
     corrections.extend(found)
-    vendor_raw = _search(r"^\s*(?:vendor|vndr)\s*:\s*(.+)$", text)
+    vendor_raw = _search(r"^\s*(?:vendor|vndr)\s*:[ \t]*(.+)$", text)
     if vendor_raw is None:
-        vendor_raw = _search(r"^\s*from\s*:\s*(.+)$", text)
+        vendor_raw = _search(r"^\s*from\s*:[ \t]*(.+)$", text)
     if vendor_raw:
         vendor_raw = re.split(r"\s+due\s*:", vendor_raw, maxsplit=1, flags=re.I)[0].strip()
     vendor_name, found = normalize_vendor_name(vendor_raw or "")
     corrections.extend(found)
-    without_due = re.sub(r"due(?:\s*(?:date|dt))?\s*:\s*[^\n]+", " ", text, flags=re.I)
-    date_raw = _search(r"(?:^|\s)(?:date|dt)\s*:\s*([^\n]+)", without_due)
-    due_raw = _search(r"(?:^|\s)due(?:\s*(?:date|dt))?\s*:\s*([^\n]+)", text)
+    without_due = re.sub(r"due(?:[ \t]*(?:date|dt))?\s*:[ \t]*[^\n]+", " ", text, flags=re.I)
+    date_raw = _search(r"(?:^|\s)(?:date|dt)\s*:[ \t]*([^\n]+)", without_due)
+    due_raw = _search(r"(?:^|\s)due(?:[ \t]*(?:date|dt))?\s*:[ \t]*([^\n]+)", text)
     invoice_date, found = parse_date(date_raw) if date_raw else (None, [])
     corrections.extend(found)
     if due_raw and due_raw.casefold() == "yesterday" and invoice_date is not None:
@@ -122,7 +122,7 @@ def parse_text(text: str) -> dict:
     else:
         due_date, found = parse_date(due_raw) if due_raw else (None, [])
         corrections.extend(found)
-    currency = _search(r"\bcurrency\s*:\s*([A-Za-z]{3})\b", text)
+    currency = _search(r"\bcurrency\s*:[ \t]*([A-Za-z]{3})\b", text)
     lines = [_text_line(line, corrections) for line in text.splitlines()]
     lines = [line for line in lines if line is not None]
     return _draft(
@@ -134,14 +134,14 @@ def parse_text(text: str) -> dict:
         due_date=due_date,
         currency=currency.upper() if currency else None,
         line_items=lines,
-        subtotal=_optional_money(_money_search(r"subtotal\s*:\s*\$?([0-9O][0-9O,.]*)", text), corrections),
+        subtotal=_optional_money(_money_search(r"subtotal\s*:[ \t]*\$?([0-9O][0-9O,.]*)", text), corrections),
         tax_amount=_optional_money(
-            _money_search(r"tax(?:\s*\([^)]*\))?\s*:\s*\$?([0-9O][0-9O,.]*)", text),
+            _money_search(r"tax(?:[ \t]*\([^)]*\))?\s*:[ \t]*\$?([0-9O][0-9O,.]*)", text),
             corrections,
         ),
         total=_money(_total_search(text), corrections),
-        payment_terms=_search(r"^(?:payment terms|pymnt terms|terms)\s*:\s*(.+)$", text),
-        notes=_search(r"^notes\s*:\s*(.+)$", text),
+        payment_terms=_search(r"^(?:payment terms|pymnt terms|terms)\s*:[ \t]*(.+)$", text),
+        notes=_search(r"^notes\s*:[ \t]*(.+)$", text),
         corrections=corrections,
     )
 
@@ -352,7 +352,7 @@ def _text_line(line: str, corrections: list[str]) -> dict | None:
         return None
     patterns = (
         re.compile(
-            r"^(?P<item>.+?)\s+qty:\s*(?P<qty>-?\d+)\s+unit price:\s*\$?(?P<price>[0-9O][0-9O,.]*)$",
+            r"^(?P<item>.+?)\s+qty:[ \t]*(?P<qty>-?\d+)\s+unit price:[ \t]*\$?(?P<price>[0-9O][0-9O,.]*)$",
             re.I,
         ),
         re.compile(
@@ -400,7 +400,7 @@ def _json_line(raw: dict, corrections: list[str]) -> dict:
     amount = raw.get("amount")
     return {
         "item": item,
-        "quantity": int(raw["quantity"]),
+        "quantity": raw["quantity"],
         "unit_price": _money(raw["unit_price"], corrections),
         "amount": _money(amount, corrections) if amount is not None else None,
         "note": raw.get("note"),
@@ -461,7 +461,7 @@ def _money_search(pattern: str, text: str) -> str | None:
 def _total_search(text: str) -> str:
     found = None
     for match in re.finditer(
-        r"total(?:\s+amount)?\s*:\s*\$?([0-9O][0-9O,.]*)",
+        r"total(?:\s+amount)?\s*:[ \t]*\$?([0-9O][0-9O,.]*)",
         text,
         re.I,
     ):
@@ -470,7 +470,7 @@ def _total_search(text: str) -> str:
             continue
         found = match.group(1)
     if found is None:
-        amt = re.search(r"^amt\s*:\s*\$?([0-9O][0-9O,.]*)", text, re.I | re.M)
+        amt = re.search(r"^amt\s*:[ \t]*\$?([0-9O][0-9O,.]*)", text, re.I | re.M)
         if amt:
             found = amt.group(1)
     if found is None:
