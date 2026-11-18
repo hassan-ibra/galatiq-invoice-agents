@@ -1,6 +1,6 @@
 import re
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 CATALOG_ITEMS = ("WidgetA", "WidgetB", "GadgetX", "FakeItem", "Shipping")
 
@@ -56,10 +56,20 @@ def normalize_vendor_name(value: str) -> tuple[str, list[str]]:
     return value, []
 
 
-def normalize_amount(value: str) -> tuple[Decimal, list[str]]:
-    fixed = _replace_o_with_zero(value)
-    cleaned = fixed.replace(",", "").replace("$", "").strip()
-    amount = Decimal(cleaned).quantize(Decimal("0.01"))
+def normalize_amount(value: str | None) -> tuple[Decimal | None, list[str]]:
+    if value is None:
+        return None, ["unreadable amount: null"]
+    if not isinstance(value, str) or value.strip() == "":
+        shown = "''" if isinstance(value, str) else repr(value)
+        return None, [f"unreadable amount: {shown}"]
+    try:
+        fixed = _replace_o_with_zero(value)
+        cleaned = fixed.replace(",", "").replace("$", "").strip()
+        if cleaned == "":
+            return None, [f"unreadable amount: {value!r}"]
+        amount = Decimal(cleaned).quantize(Decimal("0.01"))
+    except InvalidOperation:
+        return None, [f"unreadable amount: {value!r}"]
     return amount, _correction(value, f"{amount:.2f}")
 
 

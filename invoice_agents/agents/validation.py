@@ -14,6 +14,7 @@ def validate(state: PipelineState) -> PipelineState:
         raise ValueError("validation requires an invoice")
 
     findings: list[Finding] = []
+    findings.extend(_unreadable_money(invoice))
     findings.extend(_check_data_integrity(invoice))
     findings.extend(_check_total(invoice))
     non_usd = invoice.currency != "USD"
@@ -47,6 +48,8 @@ def _check_data_integrity(invoice: Invoice) -> list[Finding]:
                     reason=f"{line.item} quantity {line.quantity} is not a positive integer",
                 )
             )
+        if line.unit_price is None:
+            continue
         expected_amount = _cents(line.unit_price * line.quantity)
         if line.amount is not None and _cents(line.amount) != expected_amount:
             findings.append(
@@ -60,12 +63,12 @@ def _check_data_integrity(invoice: Invoice) -> list[Finding]:
                 )
             )
     if invoice.subtotal is not None:
-        computed = _cents(
-            sum(
-                (_line_amount(line) for line in invoice.line_items if not _is_shipping(line)),
-                Decimal("0"),
-            )
-        )
+        amounts = [
+            _line_amount(line) for line in invoice.line_items if not _is_shipping(line)
+        ]
+        if any(amount is None for amount in amounts):
+            return findings
+        computed = _cents(sum(amounts, Decimal("0")))
         stated = _cents(invoice.subtotal)
         if stated != computed:
             findings.append(
@@ -78,7 +81,19 @@ def _check_data_integrity(invoice: Invoice) -> list[Finding]:
     return findings
 
 
+def _unreadable_money(invoice: Invoice) -> list[Finding]:
+    return [
+        Finding(rule=6, outcome="hold", reason=note)
+        for note in invoice.corrections
+        if "unreadable:" in note
+    ]
+
+
 def _check_total(invoice: Invoice) -> list[Finding]:
+    if invoice.total is None or invoice.tax_amount is None:
+        return []
+    if any(line.unit_price is None and line.amount is None for line in invoice.line_items):
+        return []
     expected = _cents(
         sum((_line_amount(line) for line in invoice.line_items), Decimal("0"))
         + invoice.tax_amount
@@ -154,7 +169,7 @@ def _check_prices(invoice: Invoice, db_path: str) -> list[Finding]:
         if _is_shipping(line):
             continue
         record = get_item(db_path, line.item)
-        if record is None or record.stock <= 0:
+        if record is None or record.stock <= 0 or line.unit_price is None:
             continue
         if line.unit_price > record.unit_price * PRICE_LIMIT:
             findings.append(
@@ -198,10 +213,12 @@ def _is_shipping(line: LineItem) -> bool:
     return line.item.casefold() == "shipping"
 
 
-def _line_amount(line: LineItem) -> Decimal:
-    if line.amount is None:
-        return _cents(line.unit_price * line.quantity)
-    return _cents(line.amount)
+def _line_amount(line: LineItem) -> Decimal | None:
+    if line.amount is not None:
+        return _cents(line.amount)
+    if line.unit_price is None:
+        return None
+    return _cents(line.unit_price * line.quantity)
 
 
 def _cents(value: Decimal) -> Decimal:

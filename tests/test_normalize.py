@@ -47,6 +47,19 @@ def test_amount_with_letter_o():
     assert corrections == ["3,500.O0 -> 3500.00"]
 
 
+def test_normalize_amount_missing_or_unreadable():
+    missing, missing_notes = normalize_amount(None)
+    blank, blank_notes = normalize_amount("")
+    text, text_notes = normalize_amount("N/A")
+
+    assert missing is None
+    assert blank is None
+    assert text is None
+    assert missing_notes == ["unreadable amount: null"]
+    assert blank_notes == ["unreadable amount: ''"]
+    assert text_notes == ["unreadable amount: 'N/A'"]
+
+
 def test_widget_a_item_name():
     name, corrections = normalize_item_name("Widget A")
 

@@ -16,7 +16,7 @@ class LineItem(BaseModel):
 
     item: str
     quantity: int
-    unit_price: Decimal
+    unit_price: Decimal | None
     amount: Decimal | None = None
     note: str | None = None
 
@@ -26,7 +26,7 @@ class LineItem(BaseModel):
         return _reject_float_money(value)
 
     def model_post_init(self, context: Any) -> None:
-        if self.amount is None:
+        if self.amount is None and self.unit_price is not None:
             self.amount = self.unit_price * self.quantity
 
 
@@ -42,8 +42,8 @@ class Invoice(BaseModel):
     currency: str = "USD"
     line_items: list[LineItem]
     subtotal: Decimal | None = None
-    tax_amount: Decimal = Decimal("0")
-    total: Decimal
+    tax_amount: Decimal | None = Decimal("0")
+    total: Decimal | None
     payment_terms: str | None = None
     notes: str | None = None
     source_files: list[str] = Field(default_factory=list)

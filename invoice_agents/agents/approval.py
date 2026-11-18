@@ -49,7 +49,7 @@ def approve(state: PipelineState) -> PipelineState:
         state.late = False
 
     skipped_gate = False
-    if invoice.currency == "USD" and invoice.total > GATE:
+    if invoice.currency == "USD" and invoice.total is not None and invoice.total > GATE:
         amount = _money(invoice.total)
         if state.status == "approved":
             if state.auto_approve:

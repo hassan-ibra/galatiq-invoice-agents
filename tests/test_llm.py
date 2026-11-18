@@ -80,23 +80,82 @@ def test_normalize_draft_money_strings_become_decimals():
     ]
 
 
-def test_grok_call_failure_exits_with_a_clear_message(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "test-key")
+def test_normalize_draft_null_tax_amount_is_left_empty():
+    draft = _normalize_draft(
+        {
+            "invoice_number": "INV-1001",
+            "subtotal": "5000.00",
+            "tax_amount": None,
+            "total": "5000.00",
+        }
+    )
 
+    assert draft["tax_amount"] is None
+    assert draft["total"] == Decimal("5000.00")
+    assert "tax_amount unreadable: null" in draft["corrections"]
+
+
+def _install_failing_client(monkeypatch, error: Exception) -> None:
     class FakeChat:
         def create(self, **kwargs):
-            raise TimeoutError("timed out")
+            raise error
 
     class FakeClient:
         def __init__(self, api_key, timeout):
             assert api_key == "test-key"
-            assert timeout == 30
+            assert timeout == 120
             self.chat = FakeChat()
 
     monkeypatch.setattr("xai_sdk.Client", FakeClient)
+
+
+@pytest.mark.parametrize("key", [None, ""])
+def test_missing_api_key_exits_without_calling_grok(monkeypatch, key):
+    if key is None:
+        monkeypatch.delenv("XAI_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("XAI_API_KEY", key)
+
+    def fail_client(*args, **kwargs):
+        raise AssertionError("Grok client was constructed")
+
+    monkeypatch.setattr("xai_sdk.Client", fail_client)
+
+    with pytest.raises(SystemExit) as caught:
+        GrokLlm()
+
+    assert caught.value.code == "XAI_API_KEY is not set."
+
+
+def test_grok_timeout_exits_immediately(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+    _install_failing_client(monkeypatch, RuntimeError("DEADLINE_EXCEEDED"))
     llm = GrokLlm()
 
     with pytest.raises(SystemExit) as caught:
         llm._ask("hello")
 
-    assert caught.value.code == "Grok call failed: timed out. Check XAI_API_KEY."
+    assert caught.value.code == "Grok call timed out after 120s."
+
+
+@pytest.mark.parametrize("status", ["UNAUTHENTICATED", "PERMISSION_DENIED"])
+def test_rejected_api_key_exits_immediately(monkeypatch, status):
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+    _install_failing_client(monkeypatch, RuntimeError(status))
+    llm = GrokLlm()
+
+    with pytest.raises(SystemExit) as caught:
+        llm._ask("hello")
+
+    assert caught.value.code == "Grok rejected the API key. Check XAI_API_KEY."
+
+
+def test_other_grok_error_names_the_reason(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+    _install_failing_client(monkeypatch, RuntimeError("connection reset"))
+    llm = GrokLlm()
+
+    with pytest.raises(SystemExit) as caught:
+        llm._ask("hello")
+
+    assert caught.value.code == "Grok call failed: connection reset"

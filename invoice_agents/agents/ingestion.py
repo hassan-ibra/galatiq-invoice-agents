@@ -126,9 +126,9 @@ def _invoice_from_draft(draft: dict) -> Invoice:
     ):
         if draft.get(key):
             data[key] = draft[key]
-    if draft.get("subtotal") is not None:
+    if "subtotal" in draft:
         data["subtotal"] = draft["subtotal"]
-    if draft.get("tax_amount") is not None:
+    if "tax_amount" in draft:
         data["tax_amount"] = draft["tax_amount"]
     return Invoice(**data)
 

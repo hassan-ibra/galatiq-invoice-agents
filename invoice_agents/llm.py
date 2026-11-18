@@ -58,10 +58,10 @@ class GrokLlm:
     def __init__(self) -> None:
         api_key = os.environ.get("XAI_API_KEY")
         if not api_key:
-            raise SystemExit("XAI_API_KEY is not set. Refusing to call Grok.")
+            raise SystemExit("XAI_API_KEY is not set.")
         from xai_sdk import Client
 
-        self._client = Client(api_key=api_key, timeout=30)
+        self._client = Client(api_key=api_key, timeout=120)
 
     def extract(self, text: str) -> dict:
         raw = self._ask(
@@ -109,6 +109,9 @@ class GrokLlm:
         )
 
     def _ask(self, prompt: str, *, json_mode: bool = False) -> str:
+        api_key = os.environ.get("XAI_API_KEY")
+        if not api_key:
+            raise SystemExit("XAI_API_KEY is not set.")
         from xai_sdk.chat import user
 
         try:
@@ -119,8 +122,29 @@ class GrokLlm:
             chat.append(user(prompt))
             return chat.sample().content
         except Exception as exc:
-            reason = str(exc).strip() or exc.__class__.__name__
-            raise SystemExit(f"Grok call failed: {reason}. Check XAI_API_KEY.") from exc
+            raise SystemExit(_grok_failure(exc)) from exc
+
+
+def _grok_failure(exc: Exception) -> str:
+    labels = [str(exc)]
+    code = getattr(exc, "code", None)
+    if callable(code):
+        try:
+            labels.append(str(code()))
+        except Exception:
+            pass
+    blob = " ".join(labels)
+    if "DEADLINE_EXCEEDED" in blob:
+        return "Grok call timed out after 120s."
+    if "UNAUTHENTICATED" in blob or "PERMISSION_DENIED" in blob:
+        return "Grok rejected the API key. Check XAI_API_KEY."
+    reason = str(exc).strip() or exc.__class__.__name__
+    return f"Grok call failed: {reason}"
+
+
+def _unreadable(field: str, value: Any) -> str:
+    shown = "null" if value is None else repr(value)
+    return f"{field} unreadable: {shown}"
 
 
 def _status(findings: list[Finding]) -> str:
@@ -175,17 +199,27 @@ def _normalize_draft(draft: dict) -> dict:
                 item["item"] = canonical
                 corrections.extend(found)
             price = item.get("unit_price")
-            if isinstance(price, str):
+            if isinstance(price, str) or price is None and "unit_price" in item:
                 amount, found = normalize_amount(price)
-                item["unit_price"] = f"{amount:.2f}"
-                corrections.extend(found)
+                if amount is None:
+                    item["unit_price"] = None
+                    corrections.append(_unreadable("unit_price", price))
+                else:
+                    item["unit_price"] = f"{amount:.2f}"
+                    corrections.extend(found)
     for key in ("subtotal", "tax_amount", "total"):
-        value = draft.get(key)
-        if not isinstance(value, str):
+        if key not in draft:
+            continue
+        value = draft[key]
+        if not isinstance(value, str) and value is not None:
             continue
         amount, found = normalize_amount(value)
-        draft[key] = amount
-        corrections.extend(found)
+        if amount is None:
+            draft[key] = None
+            corrections.append(_unreadable(key, value))
+        else:
+            draft[key] = amount
+            corrections.extend(found)
     existing = draft.get("corrections")
     if not isinstance(existing, list):
         existing = []
