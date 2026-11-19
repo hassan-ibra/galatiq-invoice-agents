@@ -40,8 +40,13 @@ That opens the web UI at http://localhost:8501.
 
 Upload a `.txt`, `.pdf`, `.json`, `.csv`, or `.xml` invoice. Leave "Use real Grok" off to run the offline mock, or turn it on to call Grok with `XAI_API_KEY` from that same Terminal window. The result shows a status badge (paid, approved, hold, or rejected) and groups the findings under a short headline, then "Why rejected", "Also needs attention", and "Notes".
 
-![UI screenshot](docs/ui.png)
-
+<table>
+  <tr>
+    <td valign="top"><img src="docs/approved.png" width="100%"></td>
+    <td valign="top"><img src="docs/hold.png" width="100%"></td>
+    <td valign="top"><img src="docs/rejected.png" width="100%"></td>
+  </tr>
+</table>
 ## Tests
 
 ```bash
