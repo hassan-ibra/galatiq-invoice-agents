@@ -23,8 +23,10 @@ python3 -m venv .venv
 That prints one JSON result. INV-1001 is approved and paid `5000.00`.
 
 ```bash
-streamlit run app.py
+.venv/bin/streamlit run app.py
 ```
+
+That opens the web UI at http://localhost:8501.
 
 - `--use-llm` calls Grok instead of the offline mock.
 - `--auto-approve` skips only the human gate for a clean USD invoice over $10,000.
@@ -40,7 +42,7 @@ streamlit run app.py
 
 ## Mock and real LLM
 
-`MockLlm` is the default, so the pipeline runs offline with no API key. `--use-llm` uses Grok (`grok-4.7`) through the `xai-sdk` package and reads the key from `XAI_API_KEY`. The model extracts text, normalizes a draft, writes a short summary, and flags an address. Deterministic code makes every money, stock, and date decision.
+`MockLlm` is the default, so the pipeline runs offline with no API key. `--use-llm` uses Grok (grok-4.7) through the `xai-sdk` package and reads the key from `XAI_API_KEY`. Run `export XAI_API_KEY=your-key-here` in the same Terminal window before `main.py --use-llm` or the Streamlit app, then turn on "Use real Grok" in the UI. The model extracts text, normalizes a draft, writes a short summary, and flags an address. Deterministic code makes every money, stock, and date decision.
 
 ## Assumptions
 
