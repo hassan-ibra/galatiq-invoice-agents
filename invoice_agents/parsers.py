@@ -459,6 +459,13 @@ def _money_search(pattern: str, text: str) -> str | None:
 
 
 def _total_search(text: str) -> str:
+    grand = re.search(
+        r"grand\s+total\s*:[ \t]*\$?([0-9O][0-9O,.]*)",
+        text,
+        re.I,
+    )
+    if grand:
+        return grand.group(1)
     found = None
     for match in re.finditer(
         r"total(?:\s+amount)?\s*:[ \t]*\$?([0-9O][0-9O,.]*)",

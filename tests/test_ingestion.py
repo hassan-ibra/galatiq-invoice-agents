@@ -4,10 +4,10 @@ from pathlib import Path
 
 from main import _payload
 
-from invoice_agents.agents.ingestion import ingest
+from invoice_agents.agents.ingestion import _invoice_from_draft, _total_problem, ingest
 from invoice_agents.audit import read_decisions
 from invoice_agents.llm import MockLlm
-from invoice_agents.models import PipelineState
+from invoice_agents.models import Invoice, LineItem, PipelineState
 from invoice_agents.parsers import parse_csv, parse_json, parse_xml, pdf_text
 
 INVOICES = Path(__file__).resolve().parents[1] / "data" / "invoices"
@@ -20,6 +20,52 @@ def _ingest(path: Path, tmp_path: Path) -> PipelineState:
         audit_path=str(tmp_path / "audit.jsonl"),
     )
     return ingest(state)
+
+
+def _product_lines() -> list[LineItem]:
+    return [
+        LineItem(item="WidgetA", quantity=8, unit_price=Decimal("250.00")),
+        LineItem(item="WidgetB", quantity=4, unit_price=Decimal("500.00")),
+        LineItem(item="GadgetX", quantity=2, unit_price=Decimal("750.00")),
+        LineItem(item="WidgetA", quantity=4, unit_price=Decimal("300.00")),
+    ]
+
+
+def test_total_problem_adds_shipping_amount():
+    matched = Invoice(
+        invoice_number="INV-1010",
+        vendor_name="Consolidated Materials Group",
+        line_items=_product_lines(),
+        subtotal=Decimal("6700.00"),
+        tax_amount=Decimal("335.00"),
+        shipping_amount=Decimal("150.00"),
+        total=Decimal("7185.00"),
+    )
+    missing_fee = matched.model_copy(update={"shipping_amount": None})
+
+    assert _total_problem(matched) is None
+    assert _total_problem(missing_fee) == (
+        "subtotal + tax 7035.00 does not equal total 7185.00"
+    )
+
+
+def test_draft_shipping_amount_reaches_the_invoice():
+    invoice = _invoice_from_draft(
+        {
+            "invoice_number": "INV-1010",
+            "vendor_name": "Consolidated Materials Group",
+            "line_items": [
+                {"item": "WidgetA", "quantity": 8, "unit_price": Decimal("250.00")}
+            ],
+            "subtotal": Decimal("2000.00"),
+            "tax_amount": Decimal("0.00"),
+            "shipping_amount": Decimal("150.00"),
+            "total": Decimal("2150.00"),
+        }
+    )
+
+    assert invoice.shipping_amount == Decimal("150.00")
+    assert type(invoice.shipping_amount) is Decimal
 
 
 def test_parse_failure_is_rejected_and_logged(tmp_path):

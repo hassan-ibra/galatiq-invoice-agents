@@ -76,10 +76,22 @@ class GrokLlm:
         raw = self._ask(
             "Extract this invoice as a JSON object with keys invoice_number, "
             "vendor_name, vendor_address, invoice_date, due_date, currency, "
-            "line_items, subtotal, tax_amount, and total. line_items is a list of "
-            "objects with item, quantity, and unit_price. Write money and dates "
-            "as strings. If there is no tax line, return tax_amount \"0.00\". "
-            "Return null only if a tax line exists but cannot be read.\n\n" + text,
+            "line_items, subtotal, tax_amount, shipping_amount, and total. "
+            "line_items is a list of objects with item, quantity, unit_price, "
+            "and note. Put only the base item name in item, for example WidgetA. "
+            "Keep notes like (rush order) out of the item name and put them in "
+            "note. Put a line like Shipping: in shipping_amount, not in "
+            "line_items. shipping_amount is the shipping or fees amount. If "
+            "there is no shipping or fee line, return shipping_amount \"0.00\". "
+            "Copy subtotal, tax_amount, shipping_amount, and total exactly as "
+            "printed. Never calculate or correct them, even if they look wrong. "
+            "Validation checks the math. A line labeled Grand Total is the total. "
+            "Never infer or convert relative dates like yesterday or next week. "
+            "Return null for that date and keep the original text in notes, for "
+            "example due date: yesterday. "
+            "Write money and dates as strings. If there is no tax line, return "
+            "tax_amount \"0.00\". Return null only if a tax line exists but "
+            "cannot be read.\n\n" + text,
             json_mode=True,
         )
         draft = _load_json(raw)
@@ -131,7 +143,7 @@ class GrokLlm:
         print(f"[grok] {step}", file=sys.stderr)
         started = time.perf_counter()
         try:
-            kwargs: dict[str, Any] = {"model": MODEL}
+            kwargs: dict[str, Any] = {"model": MODEL, "temperature": 0}
             if json_mode:
                 kwargs["response_format"] = "json_object"
             chat = self._client.chat.create(**kwargs)
@@ -183,6 +195,15 @@ def _read_grok_amount(value: Any) -> tuple[Decimal | None, list[str], bool]:
 def _unreadable(field: str, value: Any) -> str:
     shown = "null" if value is None else repr(value)
     return f"{field} unreadable: {shown}"
+
+
+_ABSENT_AMOUNTS = {"", "null", "none", "n/a"}
+
+
+def _amount_not_present(value: Any) -> bool:
+    if value is None:
+        return True
+    return isinstance(value, str) and value.strip().casefold() in _ABSENT_AMOUNTS
 
 
 def _status(findings: list[Finding]) -> str:
@@ -239,25 +260,33 @@ def _normalize_draft(draft: dict) -> dict:
             if "unit_price" not in item:
                 continue
             price = item.get("unit_price")
+            if _amount_not_present(price):
+                item["unit_price"] = None
+                continue
             amount, found, handled = _read_grok_amount(price)
             if not handled:
                 continue
             if amount is None:
                 item["unit_price"] = None
-                corrections.append(_unreadable("unit_price", price))
+                if price is not None:
+                    corrections.append(_unreadable("unit_price", price))
             else:
                 item["unit_price"] = f"{amount:.2f}"
                 corrections.extend(found)
-    for key in ("subtotal", "tax_amount", "total"):
+    for key in ("subtotal", "tax_amount", "shipping_amount", "total"):
         if key not in draft:
             continue
         value = draft[key]
+        if _amount_not_present(value):
+            draft[key] = None
+            continue
         amount, found, handled = _read_grok_amount(value)
         if not handled:
             continue
         if amount is None:
             draft[key] = None
-            corrections.append(_unreadable(key, value))
+            if value is not None:
+                corrections.append(_unreadable(key, value))
         else:
             draft[key] = amount
             corrections.extend(found)

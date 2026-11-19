@@ -266,10 +266,11 @@ def _total_problem(invoice: Invoice) -> str | None:
             Decimal("0"),
         )
     )
+    fee = invoice.shipping_amount if invoice.shipping_amount is not None else Decimal("0")
     if invoice.subtotal is None:
-        expected = _cents(sum(amounts, Decimal("0")) + invoice.tax_amount)
+        expected = _cents(sum(amounts, Decimal("0")) + invoice.tax_amount + fee)
     else:
-        expected = _cents(invoice.subtotal + invoice.tax_amount + shipping)
+        expected = _cents(invoice.subtotal + invoice.tax_amount + shipping + fee)
     stated = _cents(invoice.total)
     if stated == expected:
         return None
@@ -323,6 +324,8 @@ def _invoice_from_draft(draft: dict) -> Invoice:
         data["subtotal"] = draft["subtotal"]
     if "tax_amount" in draft:
         data["tax_amount"] = draft["tax_amount"]
+    if "shipping_amount" in draft:
+        data["shipping_amount"] = draft["shipping_amount"]
     return Invoice(**data)
 
 
@@ -339,6 +342,7 @@ def _merge(copies: list[tuple[Path, dict]]) -> tuple[dict, list[Finding]]:
             "currency",
             "subtotal",
             "tax_amount",
+            "shipping_amount",
             "total",
             "payment_terms",
             "notes",

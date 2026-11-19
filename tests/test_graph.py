@@ -4,6 +4,7 @@ import sqlite3
 import subprocess
 import sys
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from invoice_agents.agents.validation import validate
 from invoice_agents.audit import read_decisions
 from invoice_agents.graph import build_graph
 from invoice_agents.inventory import get_item
+from invoice_agents.llm import GrokLlm
 from invoice_agents.models import PipelineState
 from setup_inventory import create_inventory
 
@@ -408,6 +410,103 @@ def test_missing_db_is_an_argparse_error(tmp_path):
     with pytest.raises(sqlite3.OperationalError):
         get_item(missing, "WidgetA")
     assert not missing.exists()
+
+
+def test_printed_grand_total_stays_mismatched_and_is_rejected(tmp_path):
+    path = tmp_path / "invoice_1013.txt"
+    path.write_text(
+        "\n".join(
+            [
+                "Invoice Number: INV-1013",
+                "Vendor: Atlas Industrial Supply",
+                "Date: 2026-01-24",
+                "Due Date: 2026-03-24",
+                "WidgetA    qty: 1    unit price: $21040.00",
+                "Subtotal: $21,040.00",
+                "Tax (7%): $1,472.80",
+                "Grand Total: $22,562.80",
+                "Total: $22,512.80",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "inventory.db"
+    create_inventory(db_path)
+    result = build_graph().invoke(
+        PipelineState(
+            source_path=str(path),
+            db_path=str(db_path),
+            audit_path=str(tmp_path / "audit.jsonl"),
+        )
+    )
+    if isinstance(result, dict):
+        result = PipelineState.model_validate(result)
+
+    assert result.invoice is not None
+    assert result.invoice.total == Decimal("22562.80")
+    assert result.invoice.total != Decimal("22512.80")
+    assert result.status == "rejected"
+    assert result.payment_result is None
+    assert any("50.00" in finding.reason for finding in result.findings)
+
+
+def test_llm_null_subtotal_string_is_paid(tmp_path, monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+    payload = json.dumps(
+        {
+            "invoice_number": "INV-1011",
+            "vendor_name": "Summit Manufacturing Co.",
+            "invoice_date": "2026-01-20",
+            "due_date": "2026-02-20",
+            "line_items": [
+                {"item": "WidgetA", "quantity": 6, "unit_price": "250.00"},
+                {"item": "WidgetB", "quantity": 3, "unit_price": "500.00"},
+            ],
+            "subtotal": "null",
+            "tax_amount": "0.00",
+            "total": "3000.00",
+        }
+    )
+
+    class FakeChat:
+        def create(self, **kwargs):
+            return self
+
+    class FakeClient:
+        def __init__(self, api_key, timeout):
+            self.chat = FakeChat()
+
+    def fake_ask(self, prompt, *, json_mode=False):
+        if prompt.startswith("Extract this invoice"):
+            return payload
+        if json_mode:
+            return '{"warnings": []}'
+        return "Invoice INV-1011 is approved."
+
+    monkeypatch.setattr("xai_sdk.Client", FakeClient)
+    monkeypatch.setattr(GrokLlm, "_ask", fake_ask)
+    path = tmp_path / "invoice_1011.txt"
+    path.write_text("Total: $3,000.00\n", encoding="utf-8")
+    db_path = tmp_path / "inventory.db"
+    create_inventory(db_path)
+    result = build_graph().invoke(
+        PipelineState(
+            source_path=str(path),
+            db_path=str(db_path),
+            audit_path=str(tmp_path / "audit.jsonl"),
+            use_llm=True,
+        )
+    )
+    if isinstance(result, dict):
+        result = PipelineState.model_validate(result)
+
+    assert result.invoice is not None
+    assert result.invoice.subtotal is None
+    assert result.invoice.total == Decimal("3000.00")
+    assert result.findings == []
+    assert result.status == "approved"
+    assert _paid_amount(result) == "3000.00"
+    assert not any("unreadable" in note for note in result.invoice.corrections)
 
 
 def test_blank_vendor_line_is_rejected(tmp_path):

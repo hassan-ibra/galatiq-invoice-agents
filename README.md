@@ -22,6 +22,10 @@ python3 -m venv .venv
 
 That prints one JSON result. INV-1001 is approved and paid `5000.00`.
 
+```bash
+streamlit run app.py
+```
+
 - `--use-llm` calls Grok instead of the offline mock.
 - `--auto-approve` skips only the human gate for a clean USD invoice over $10,000.
 - `--as-of YYYY-MM-DD` is the day used to mark an invoice late; omitted, that day is the invoice's own date.

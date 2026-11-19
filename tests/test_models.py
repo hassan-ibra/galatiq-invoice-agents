@@ -68,6 +68,17 @@ def test_money_fields_stay_decimal():
     assert line.note == "Volume discount"
 
 
+def test_shipping_amount_is_optional_decimal():
+    invoice = _invoice()
+    with_fee = _invoice(shipping_amount=Decimal("150.00"))
+
+    assert invoice.shipping_amount is None
+    assert with_fee.shipping_amount == Decimal("150.00")
+    assert type(with_fee.shipping_amount) is Decimal
+    with pytest.raises(ValidationError):
+        _invoice(shipping_amount=150.00)
+
+
 def test_float_money_is_rejected():
     with pytest.raises(ValidationError):
         _line(unit_price=250.00)

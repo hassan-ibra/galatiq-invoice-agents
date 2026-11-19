@@ -61,6 +61,88 @@ def test_summarize_and_critique_pair():
     assert "rejected" in rejected
 
 
+def test_extract_prompt_reads_shipping_and_keeps_notes_out_of_item_names(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+    prompts: list[str] = []
+
+    class FakeChat:
+        def create(self, **kwargs):
+            return self
+
+        def append(self, message):
+            return None
+
+        def sample(self):
+            raise AssertionError("extract should be stubbed before the API call")
+
+    class FakeClient:
+        def __init__(self, api_key, timeout):
+            self.chat = FakeChat()
+
+    monkeypatch.setattr("xai_sdk.Client", FakeClient)
+    llm = GrokLlm()
+
+    def capture(prompt, *, json_mode=False):
+        prompts.append(prompt)
+        return "{}"
+
+    llm._ask = capture
+    llm.extract("INVOICE #INV-1010")
+
+    prompt = prompts[0]
+    assert "shipping_amount" in prompt
+    assert "Shipping:" in prompt
+    assert "WidgetA" in prompt
+    assert "rush order" in prompt
+    assert "Grand Total" in prompt
+    assert "exactly as printed" in prompt
+    assert "Never calculate or correct" in prompt
+    assert "yesterday" in prompt
+    assert "next week" in prompt
+    assert "Never infer or convert relative dates" in prompt
+    assert "due date: yesterday" in prompt
+    assert prompt.index("WidgetA") < prompt.index("INVOICE #INV-1010")
+
+
+def test_every_grok_call_uses_temperature_zero(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+    created: list[dict] = []
+
+    class Sample:
+        content = "{}"
+
+    class FakeChat:
+        def create(self, **kwargs):
+            created.append(kwargs)
+            return self
+
+        def append(self, message):
+            return None
+
+        def sample(self):
+            return Sample()
+
+    class FakeClient:
+        def __init__(self, api_key, timeout):
+            self.chat = FakeChat()
+
+    monkeypatch.setattr("xai_sdk.Client", FakeClient)
+    llm = GrokLlm()
+    invoice = _invoice()
+
+    llm.extract("INVOICE")
+    llm.flag_address("100 Main St")
+    llm.summarize(invoice, [])
+    llm.critique("Invoice INV-1001 is approved.")
+
+    assert len(created) == 4
+    assert all(call["temperature"] == 0 for call in created)
+    draft = _normalize_draft({"shipping_amount": "$150.00", "total": "7185.00"})
+
+    assert draft["shipping_amount"] == Decimal("150.00")
+    assert type(draft["shipping_amount"]) is Decimal
+
+
 def test_normalize_draft_money_strings_become_decimals():
     draft = _normalize_draft(
         {
@@ -123,7 +205,22 @@ def test_normalize_draft_null_tax_amount_is_left_empty():
 
     assert draft["tax_amount"] is None
     assert draft["total"] == Decimal("5000.00")
-    assert "tax_amount unreadable: null" in draft["corrections"]
+    assert "tax_amount unreadable: null" not in draft["corrections"]
+
+
+def test_missing_subtotal_is_not_unreadable_but_garbled_text_is():
+    missing = _normalize_draft({"total": "100000.00"})
+    empty = _normalize_draft({"subtotal": None, "total": "100000.00"})
+    garbled = _normalize_draft({"subtotal": "twelve dollars", "total": "100000.00"})
+
+    assert "subtotal unreadable: null" not in missing["corrections"]
+    assert "subtotal unreadable: null" not in empty["corrections"]
+    assert empty["subtotal"] is None
+    for absent in ("", "null", "None", "N/A"):
+        draft = _normalize_draft({"subtotal": absent, "total": "100000.00"})
+        assert draft["subtotal"] is None
+        assert not any("unreadable" in note for note in draft["corrections"])
+    assert "subtotal unreadable: 'twelve dollars'" in garbled["corrections"]
 
 
 def _install_failing_client(monkeypatch, error: Exception) -> None:
