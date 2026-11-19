@@ -178,6 +178,68 @@ def test_row4_total_mismatch_rejects(tmp_path):
     assert any("50.00" in reason for reason in _reasons(over, 4))
 
 
+def test_total_check_adds_shipping_amount(tmp_path):
+    lines = [
+        _line("WidgetA", 8, "250.00"),
+        _line("WidgetB", 4, "500.00"),
+        _line("GadgetX", 2, "750.00"),
+        _line("WidgetA", 4, "300.00"),
+    ]
+    matched = _run(
+        tmp_path,
+        _invoice(
+            "INV-1010",
+            lines,
+            "7185.00",
+            subtotal="6700.00",
+            tax_amount="335.00",
+            shipping_amount=Decimal("150.00"),
+            vendor_name="Consolidated Materials Group",
+        ),
+    )
+    missing_fee = _run(
+        tmp_path,
+        _invoice(
+            "INV-1010-SHORT",
+            lines,
+            "7185.00",
+            subtotal="6700.00",
+            tax_amount="335.00",
+            vendor_name="Consolidated Materials Group",
+        ),
+    )
+
+    assert _reasons(matched, 4) == []
+    assert any("150.00" in reason for reason in _reasons(missing_fee, 4))
+
+
+def test_stock_check_sums_the_same_item_before_comparing(tmp_path):
+    within = _run(
+        tmp_path,
+        _invoice(
+            "INV-1010-STOCK",
+            [_line("WidgetA", 8, "250.00"), _line("WidgetA", 4, "250.00")],
+            "3000.00",
+            subtotal="3000.00",
+        ),
+    )
+    over = _run(
+        tmp_path,
+        _invoice(
+            "INV-1010-OVER",
+            [_line("WidgetA", 8, "250.00"), _line("WidgetA", 8, "250.00")],
+            "4000.00",
+            subtotal="4000.00",
+        ),
+    )
+
+    assert _reasons(within, 1) == []
+    assert within.status == "approved"
+    over_reason = " ".join(_reasons(over, 1))
+    assert "16" in over_reason
+    assert "15" in over_reason
+
+
 def test_row5_unknown_or_zero_stock_rejects(tmp_path):
     unknown = _run(
         tmp_path,
@@ -306,6 +368,45 @@ def test_row9_high_price_holds_shipping_allowed(tmp_path):
     )
     assert discount.status == "approved"
     assert _reasons(discount, 9) == []
+
+
+def test_relative_due_date_note_is_a_hold(tmp_path):
+    yesterday = _run(
+        tmp_path,
+        _invoice(
+            "INV-1003",
+            [_line("WidgetA", 1, "250.00")],
+            "250.00",
+            subtotal="250.00",
+            notes="due date: yesterday",
+            vendor_name="Fraudster LLC",
+        ),
+    )
+    next_week = _run(
+        tmp_path,
+        _invoice(
+            "INV-1003-NEXT",
+            [_line("WidgetA", 1, "250.00")],
+            "250.00",
+            subtotal="250.00",
+            notes="due date: next week",
+        ),
+    )
+    ordinary = _run(
+        tmp_path,
+        _invoice(
+            "INV-1003-NOTE",
+            [_line("WidgetA", 1, "250.00")],
+            "250.00",
+            subtotal="250.00",
+            notes="URGENT - Pay immediately to avoid penalties!!!",
+        ),
+    )
+
+    assert yesterday.status == "hold"
+    assert "due date 'yesterday' is not a valid date" in _reasons(yesterday, 6)
+    assert "due date 'next week' is not a valid date" in _reasons(next_week, 6)
+    assert _reasons(ordinary, 6) == []
 
 
 def test_clean_invoice_is_approved(tmp_path):

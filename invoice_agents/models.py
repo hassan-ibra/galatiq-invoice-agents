@@ -48,6 +48,7 @@ class Invoice(BaseModel):
     line_items: list[LineItem]
     subtotal: Decimal | None = None
     tax_amount: Decimal | None = Decimal("0")
+    shipping_amount: Decimal | None = None
     total: Decimal | None
     payment_terms: str | None = None
     notes: str | None = None
@@ -55,7 +56,7 @@ class Invoice(BaseModel):
     corrections: list[str] = Field(default_factory=list)
     address_warnings: list[str] = Field(default_factory=list)
 
-    @field_validator("subtotal", "tax_amount", "total", mode="before")
+    @field_validator("subtotal", "tax_amount", "shipping_amount", "total", mode="before")
     @classmethod
     def money_must_not_be_float(cls, value: Any) -> Any:
         return _reject_float_money(value)

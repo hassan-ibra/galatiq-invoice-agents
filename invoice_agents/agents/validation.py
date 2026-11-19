@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal
 
 from invoice_agents.audit import append_decision
@@ -15,6 +16,7 @@ def validate(state: PipelineState) -> PipelineState:
 
     findings: list[Finding] = []
     findings.extend(_unreadable_money(invoice))
+    findings.extend(_relative_dates(invoice))
     findings.extend(_check_data_integrity(invoice))
     findings.extend(_check_total(invoice))
     non_usd = invoice.currency != "USD"
@@ -98,6 +100,27 @@ def _check_data_integrity(invoice: Invoice) -> list[Finding]:
     return findings
 
 
+def _relative_dates(invoice: Invoice) -> list[Finding]:
+    findings: list[Finding] = []
+    for match in re.finditer(
+        r"(due date|invoice date):\s*([^;\n]+)",
+        invoice.notes or "",
+        re.I,
+    ):
+        label = match.group(1).casefold()
+        original = match.group(2).strip().strip("'\"")
+        if not original:
+            continue
+        findings.append(
+            Finding(
+                rule=6,
+                outcome="hold",
+                reason=f"{label} '{original}' is not a valid date",
+            )
+        )
+    return findings
+
+
 def _unreadable_money(invoice: Invoice) -> list[Finding]:
     return [
         Finding(rule=6, outcome="hold", reason=note)
@@ -111,9 +134,11 @@ def _check_total(invoice: Invoice) -> list[Finding]:
         return []
     if any(line.unit_price is None and line.amount is None for line in invoice.line_items):
         return []
+    fee = invoice.shipping_amount if invoice.shipping_amount is not None else Decimal("0")
     expected = _cents(
         sum((_line_amount(line) for line in invoice.line_items), Decimal("0"))
         + invoice.tax_amount
+        + fee
     )
     stated = _cents(invoice.total)
     if stated == expected:

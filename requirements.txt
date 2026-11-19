@@ -3,3 +3,4 @@ langgraph==1.2.22
 pdfplumber==0.11.10
 pytest==9.2.0
 xai-sdk==1.21.0
+streamlit==1.67.0
