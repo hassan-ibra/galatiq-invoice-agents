@@ -97,4 +97,15 @@ Default flags. Each row is the final status from the end-to-end tests.
 
 Approved invoices are paid by the mock. Hold and rejected invoices are not.
 
+## Future work
+
+- **Same rules offline and online:** make MockLlm follow the same date and total rules as the Grok prompt.
+- **Consistency checks:** run extraction 2–3 times and send disagreements to human review.
+- **Currency conversion:** convert non-USD invoices with a daily rate instead of holding them.
+- **Duplicate detection:** link revisions like INV-1004 and INV-1004 R1 so a vendor is never paid twice.
+- **Approval screen:** let a reviewer approve or reject held invoices in the UI.
+- **Vendor registry:** check vendors against an approved list and move inventory to Postgres.
+- **Accuracy tracking:** score every prompt change against a labeled set of invoices.
+- **Automatic intake:** pick up invoices from an inbox or folder instead of manual upload.
+
 The eighteen decision rules are in [DECISIONS.md](DECISIONS.md).
