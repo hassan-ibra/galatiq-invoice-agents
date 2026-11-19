@@ -92,4 +92,4 @@ Default flags. Each row is the final status from the end-to-end tests.
 
 Approved invoices are paid by the mock. Hold and rejected invoices are not.
 
-The twelve decision rules are in [DECISIONS.md](DECISIONS.md).
+The eighteen decision rules are in [DECISIONS.md](DECISIONS.md).
